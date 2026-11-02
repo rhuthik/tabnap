@@ -45,6 +45,7 @@ class Terminal:
         self.cfg = cfg
         self.up = False
         self.keys = {}       # pane key -> last keystroke time, if the terminal can tell us
+        self.all_keys = None # every pane key that exists, watched or not (None: same as panes())
 
     async def start(self, engine):
         """Connect. Return False if this terminal isn't running or usable here."""

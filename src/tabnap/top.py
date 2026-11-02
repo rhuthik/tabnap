@@ -7,7 +7,7 @@ from tabnap.server import api
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 LABEL = {"claude": "Claude", "codex": "Codex"}
-HELP = "↑↓ select   h hibernate   w wake   r refresh   p pin   a auto   ⏎ go to tab   q quit"
+HELP = "↑↓ select   h hibernate   H all idle   w wake   r refresh   p pin   a auto   ⏎ go to tab   q quit"
 
 
 def gb(mb):
@@ -81,7 +81,9 @@ def draw(scr, st, sel, frame, msg):
                     put(y, 11 + len(who) + 2, text, curses.A_DIM)
                     y += 1
     if not st["sessions"]:
-        put(3, 2, "No Claude Code or Codex sessions found.", curses.A_DIM)
+        hint = ("No Claude Code or Codex sessions found." if st.get("terminals")
+                else "Not connected to iTerm2 or tmux yet.")
+        put(3, 2, hint + "  `tabnap doctor` shows what tabnap can see.", curses.A_DIM)
     put(h - 2, 0, "─" * (w - 1), curses.A_DIM)
     put(h - 1, 1, msg or HELP, curses.color_pair(4) if msg else curses.A_DIM)
     scr.refresh()
@@ -119,6 +121,14 @@ def loop(scr):
         elif ch in (curses.KEY_UP, ord("k")) and rows:
             sel = max(sel - 1, 0)
             sel_id = rows[sel]["id"]
+        elif ch == ord("H"):
+            draw(scr, st, sel, frame, "putting idle sessions to sleep…")
+            try:
+                res = api("/api/hibernate_idle")
+                msg, msg_until = f"{len(res['slept'])} put to sleep, {len(res['skipped'])} left awake", time.time() + 4
+            except SystemExit as e:
+                msg, msg_until = str(e), time.time() + 4
+            fetched = 0
         elif ch == ord("a") or (rows and ch in (ord("h"), ord("w"), ord("r"), ord("p"), 10, 13, curses.KEY_ENTER)):
             r = rows[sel] if rows else None
             params = {}

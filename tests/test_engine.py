@@ -111,7 +111,9 @@ class AdoptAndSnapshot(unittest.TestCase):
         files = sorted(os.listdir(e.cfg.snapshot_dir))
         self.assertEqual(len(files), 2)
         import json
-        rows = json.load(open(os.path.join(e.cfg.snapshot_dir, files[-1])))
+        newest = os.path.join(e.cfg.snapshot_dir, files[-1])
+        self.assertEqual(os.stat(newest).st_mode & 0o777, 0o600)
+        rows = json.load(open(newest))
         self.assertEqual({r["session_id"] for r in rows}, {"s1", "s2"})
 
 
@@ -134,6 +136,20 @@ class AwakeCap(unittest.TestCase):
         self.assertEqual(e.over_cap(), [])
 
 
+class SleepAllIdle(unittest.TestCase):
+    def test_only_unblocked_idle_rows(self):
+        e, _ = engine_with(FakeAgent())
+        e.rows = [{"id": "a", "title": "A", "state": "idle"}, {"id": "b", "title": "B", "state": "idle", "blocker": "kept awake"},
+                  {"id": "c", "title": "C", "state": "working"}]
+        tried = []
+
+        async def fake_hibernate(key, reason="manual", strict=False):
+            tried.append((key, strict))
+        e.hibernate = fake_hibernate
+        slept, skipped = asyncio.run(e.hibernate_idle())
+        self.assertEqual((slept, skipped, tried), (["A"], {"B": "kept awake"}, [("a", True)]))
+
+
 class ConfigFile(unittest.TestCase):
     def test_set_value_round_trips_and_validates(self):
         from tabnap import config
@@ -145,7 +161,8 @@ class ConfigFile(unittest.TestCase):
         c = config.load(path)
         self.assertEqual((c.max_awake, c.auto_agents, c.context), (6, ["claude"], True))
         self.assertEqual(c.claude_resume_by_dir, {"~/p/*": "claude-{profile} --resume {id}"})
-        for key, bad in (("idle_minutes", "0"), ("auto.agents", "claude,gemini"), ("features.context", "maybe")):
+        for key, bad in (("idle_minutes", "0"), ("auto.agents", "claude,gemini"), ("features.context", "maybe"),
+                         ("snapshot.every_minutes", "0")):
             with self.assertRaises(ValueError):
                 config.set_value(key, bad, path)
         with self.assertRaises(KeyError):

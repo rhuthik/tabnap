@@ -49,8 +49,8 @@ def make_handler(engine, loop, token):
             self.end_headers()
             self.wfile.write(data)
 
-        def run(self, coro):
-            return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=60)
+        def run(self, coro, timeout=60):
+            return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
 
         def handle_any(self):
             url = urllib.parse.urlparse(self.path)
@@ -78,6 +78,10 @@ def make_handler(engine, loop, token):
                     engine.set_pin(key, url.path == "/api/pin")
                 elif url.path == "/api/auto":
                     engine.set_auto(q.get("on") == "1")
+                elif url.path == "/api/hibernate_idle":
+                    slept, skipped = self.run(engine.hibernate_idle(), timeout=900)
+                    self.run(engine.settle())
+                    return self.reply(200, {"ok": True, "slept": slept, "skipped": skipped})
                 elif url.path == "/api/adopt":
                     length = int(self.headers.get("Content-Length") or 0)
                     if length > 1 << 20:
@@ -136,7 +140,7 @@ def api(path, method="POST", **params):
     url = f"http://127.0.0.1:{info['port']}{path}?" + urllib.parse.urlencode({"t": info["token"], **params})
     req = urllib.request.Request(url, data=b"" if method == "POST" else None, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=900 if path == "/api/hibernate_idle" else 60) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
         try:

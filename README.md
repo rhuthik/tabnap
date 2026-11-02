@@ -57,21 +57,23 @@ Drop `[iterm]` on Linux or if you only use tmux.
 | `tabnap top` | the session list: `h` hibernate · `w` wake · `r` refresh · `p` pin · `a` auto · `⏎` jump to the tab |
 | `tabnap status` | the same, printed once |
 | `tabnap hibernate <tab>` / `wake` / `refresh` | `<tab>` is part of the title, an agent name, or a tab id |
+| `tabnap hibernate --idle` | put every idle session to sleep now (also **Sleep all idle** in the panel, `H` in `top`) |
 | `tabnap pin <tab>` | never auto-hibernate this one (`unpin` to undo) |
 | `tabnap auto on\|off` | auto-hibernate switch |
 | `tabnap panel` | the session panel in your browser |
 | `tabnap start` / `stop` / `restart` | run the daemon now and at login / stop it / restart after a config edit |
 | `tabnap doctor` | what tabnap can see, if something looks off |
+| `tabnap snapshot` | the latest crash snapshot as paste-able `cd … && claude --resume …` lines |
 
 **tmux:** `prefix + N` opens the session list in a popup. Hibernated windows show `zz <title>` in the status line.
 **iTerm2:** View → Toolbelt → **Agent sessions** for the sidebar (rename it with `panel_title`). The status-bar button reads `✳ Idle 12m · Hibernate` or `zz Hibernated · ▶ Wake`; click it to toggle.
 
 ## Configure
 
-Every setting can be changed three ways, and changes apply without a restart:
+Settings apply without a restart:
 
-- the **gear** in the session panel;
-- `tabnap config` to list them, and `tabnap config set <key> <value>` to change one;
+- the **gear** in the session panel has the common ones (auto-hibernate rules, features, title);
+- `tabnap config` lists every setting, and `tabnap config set <key> <value>` changes one;
 - editing `~/.config/tabnap/config.toml` (or `tabnap config edit`).
 
 ```sh
@@ -94,7 +96,7 @@ tabnap auto on                                       # the auto-hibernate switch
 | `features.title_spinner` / `tab_icon` | on | iTerm2 tab decorations |
 | `panel_title` | Agent sessions | heading of the session list |
 | `claude.resume_by_dir` | – | how each Claude config dir resumes, e.g. `"~/.claude-profiles/*" = "claude-{profile} --resume {id}"` |
-| `snapshot.dir` | – | write every session and its resume command here every 15 min (crash insurance) |
+| `snapshot.dir` | – | crash insurance: every 15 min, write every session and its resume command here (private files). After a crash, `tabnap snapshot` prints them ready to paste |
 
 Per session: **pin** a session (📌 in the panel, `tabnap pin <tab>`) to keep it awake.
 

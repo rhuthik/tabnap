@@ -132,6 +132,8 @@ def coerce(setting, value):
             raise ValueError(f"{setting.key}: must not be negative")
         if setting.key == "idle_minutes" and n <= 0:
             raise ValueError("idle_minutes: must be more than 0")
+        if setting.key == "snapshot.every_minutes" and n < 1:
+            raise ValueError("snapshot.every_minutes: at least 1")
         return n
     if kind == "list":
         if isinstance(value, str):

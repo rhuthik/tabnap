@@ -3,7 +3,8 @@
   tabnap install            pick features, set up iTerm2 / tmux, run the daemon at login (--yes: defaults)
   tabnap status             agent sessions and their state
   tabnap top                interactive list (works in any terminal; bind it to a tmux popup)
-  tabnap hibernate <tab>    <tab>: part of the title, or the start of the tab id
+  tabnap hibernate <tab>    <tab>: part of the title, an agent name, or the start of the tab id
+  tabnap hibernate --idle   put every idle session to sleep (pinned, focused and busy ones stay awake)
   tabnap wake <tab>
   tabnap refresh <tab>      hibernate + wake: same conversation, fresh process (drops leaked memory)
   tabnap pin <tab>          keep awake: never auto-hibernate (unpin to undo)
@@ -13,6 +14,7 @@
   tabnap setup iterm        add the Wake/Hibernate button to iTerm2 status bars
   tabnap config             show every setting; `tabnap config set <key> <value>` changes one (applied live)
   tabnap doctor             check what tabnap can see
+  tabnap snapshot           the newest crash snapshot as paste-able resume commands
   tabnap start | stop       start the daemon now and at login / stop it (no questions asked)
   tabnap restart            restart the daemon (after editing the config)
   tabnap daemon             run in the foreground (what install runs)
@@ -122,8 +124,11 @@ def cmd_status():
 
 
 def cmd_panel():
-    with open(DAEMON_FILE) as fh:
-        info = json.load(fh)
+    try:
+        with open(DAEMON_FILE) as fh:
+            info = json.load(fh)
+    except (OSError, ValueError):
+        raise SystemExit("tabnap isn't running. Start it with `tabnap start` (or `tabnap install` to set it up).")
     url = f"http://127.0.0.1:{info['port']}/panel?t={info['token']}"
     webbrowser.open(url)
     print("Opened the panel in your browser.")
@@ -209,6 +214,26 @@ def report_reload(result, key=None):
         print(f"{what}; applied now.")
 
 
+def cmd_snapshot():
+    """Print the newest crash snapshot as commands you can paste, one tab per line."""
+    import glob
+    import re
+    cfg = config.load()
+    if not cfg.snapshot_dir:
+        raise SystemExit("Snapshots are off. Turn them on: tabnap config set snapshot.dir ~/.local/state/tabnap/snapshots")
+    pattern = re.sub(r"%[a-zA-Z]", "*", cfg.snapshot_name)
+    files = sorted(glob.glob(os.path.join(cfg.snapshot_dir, pattern)))
+    if not files:
+        raise SystemExit(f"No snapshots in {cfg.snapshot_dir} yet (one is written every {cfg.snapshot_minutes:g} min).")
+    with open(files[-1]) as fh:
+        rows = json.load(fh)
+    from tabnap.engine import cd_arg
+    print(f"# {files[-1]}: {len(rows)} sessions. Open a tab per line and paste it.")
+    for r in rows:
+        if r.get("command"):
+            print(f"cd {cd_arg(r['cwd'])} && {r['command']}    # {r.get('title') or ''}{' (was hibernated)' if r.get('hibernated') else ''}")
+
+
 def cmd_doctor():
     from tabnap.agents import top_level
     cfg = config.load()
@@ -231,8 +256,8 @@ def cmd_doctor():
         print(f"  {tty:<14} {agent.name:<6} pid {pid:<7} {live.status:<8} session {live.session_id or '-'}"
               f"{'' if live.confident else ' (guess)'}")
     try:
-        api("/api/state", method="GET")
-        print("daemon: running")
+        st = api("/api/state", method="GET")
+        print(f"daemon: running; connected to: {', '.join(st.get('terminals') or []) or 'no terminal (see above)'}")
     except SystemExit as e:
         print(f"daemon: {e}")
 
@@ -247,6 +272,13 @@ def main(argv=None):
     if cmd == "top":
         from tabnap import top
         return top.main()
+    if cmd == "hibernate" and args == ["--idle"]:
+        result = api("/api/hibernate_idle")
+        for t in result["slept"]:
+            print(f"hibernated: {t}")
+        for t, why in result["skipped"].items():
+            print(f"left awake: {t} ({why})")
+        return print(f"{len(result['slept'])} put to sleep, {len(result['skipped'])} left awake.")
     if cmd in ("hibernate", "wake", "refresh", "pin", "unpin") and args:
         row = resolve(" ".join(args))
         api(f"/api/{cmd}", id=row["id"])
@@ -262,6 +294,8 @@ def main(argv=None):
         return cmd_config(args)
     if cmd == "doctor":
         return cmd_doctor()
+    if cmd == "snapshot":
+        return cmd_snapshot()
     if cmd == "install":
         from tabnap import wizard
         return wizard.run(assume_yes="--yes" in args or "-y" in args)

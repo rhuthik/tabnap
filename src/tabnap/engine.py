@@ -219,8 +219,11 @@ class Engine:
                     rows.append(await self.hibernated_row(pane, hib, now))
                 else:
                     await self.undecorate(pane)
+        existing = set(panes)
+        for term in seen_terms:
+            existing |= term.all_keys or set()
         for key in list(self.state["tabs"]):
-            if key in panes:
+            if key in existing:
                 self.missing.pop(key, None)
                 continue
             if not any(key.startswith(t.prefix + ":") for t in seen_terms):
@@ -527,6 +530,21 @@ class Engine:
         log(f"waking {hib['agent']} {hib['session_id']} ({hib['title']})")
         self.nudge()
 
+    async def hibernate_idle(self):
+        """Put every idle session to sleep that auto-hibernate could take (same rules, no idle timer).
+        Returns (slept titles, {title: why skipped})."""
+        slept, skipped = [], {}
+        for row in [r for r in self.rows if r.get("state") == "idle"]:
+            if row.get("blocker"):
+                skipped[row["title"]] = row["blocker"]
+                continue
+            try:
+                await self.hibernate(row["id"], reason="sleep all idle", strict=True)
+                slept.append(row["title"])
+            except ActionError as e:
+                skipped[row["title"]] = str(e)
+        return slept, skipped
+
     async def refresh(self, key):
         """Hibernate + wake: same conversation in a fresh process, which drops any leaked memory."""
         await self.hibernate(key, reason="refresh")
@@ -594,9 +612,10 @@ class Engine:
         if not rows:
             return
         rows.sort(key=lambda r: r["tty"])
-        os.makedirs(self.cfg.snapshot_dir, exist_ok=True)
+        os.makedirs(self.cfg.snapshot_dir, mode=0o700, exist_ok=True)
         path = os.path.join(self.cfg.snapshot_dir, datetime.datetime.now().strftime(self.cfg.snapshot_name))
-        with open(path + ".tmp", "w") as fh:
+        # Private: snapshots hold session ids, folders and resume commands.
+        with open(os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
             json.dump(rows, fh, indent=1)
         os.replace(path + ".tmp", path)
         pattern = re.sub(r"%[a-zA-Z]", "*", self.cfg.snapshot_name)
@@ -612,7 +631,7 @@ class Engine:
                 self.write_snapshot()
             except Exception as e:  # pylint: disable=broad-except
                 log(f"snapshot failed: {type(e).__name__}: {e}")
-            await asyncio.sleep(self.cfg.snapshot_minutes * 60)
+            await asyncio.sleep(max(1.0, self.cfg.snapshot_minutes) * 60)
 
     async def reload(self):
         """Re-read the config file and apply it now. Returns the changed keys that need a restart."""

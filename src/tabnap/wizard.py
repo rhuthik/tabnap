@@ -113,13 +113,15 @@ def run(assume_yes=False):
             c.tab_icon = p.ask("  Show a sleeping icon on hibernated tabs?", c.tab_icon)
             if not iterm_api_enabled() and p.ask("  tabnap needs iTerm2's Python API. Turn it on now?", True):
                 subprocess.run(["defaults", "write", "com.googlecode.iterm2", "EnableAPIServer", "-bool", "true"])
-                print("  Done. Restart iTerm2 if it is running so the setting takes effect.")
+                print("  Done. Quit and reopen iTerm2 so it takes effect; until then tabnap can't see your iTerm2 tabs")
+                print("  (`tabnap doctor` shows whether it's connected).")
     wants_tmux = bool(shutil.which("tmux")) and p.ask(
         "Set up tmux (state labels in the status line, prefix+N opens the session list)?", True)
     c.terminals = [t for t, on in (("iterm", wants_iterm), ("tmux", wants_tmux)) if on]
     if not c.terminals:
-        print("  No terminal picked, so the daemon will have nothing to watch. tabnap supports iTerm2 and tmux"
-              " (tmux runs inside any terminal).")
+        print("\n  ! No terminal picked, so tabnap has nothing to watch yet.")
+        print("    tabnap works with iTerm2 and with tmux (which runs inside any terminal). Run `tabnap install` again")
+        print("    when you've picked one, or `tabnap setup tmux` / `tabnap setup iterm` directly.\n")
 
     config.write(c)
     print(f"\nSaved your choices to {CONFIG_FILE}")
@@ -129,7 +131,9 @@ def run(assume_yes=False):
     save_state(st)
 
     if wants_tmux:
-        print(f"tmux: added a source-file line to {setup_tmux(exe)}")
+        conf = setup_tmux(exe)
+        print(f"tmux: added a source-file line to {conf} and reloaded running tmux servers.")
+        print(f"      In a tmux session, prefix + N opens the session list (or run: tmux source-file {conf}).")
     if p.ask("Start tabnap now and at every login?", True):
         path = service.install()
         print(f"Daemon running ({path}); log: {LOG_FILE}")

@@ -118,6 +118,8 @@ class ITerm(Terminal):
         if w and w.current_tab:
             current = w.current_tab.current_session.session_id
         out = []
+        # Tabs outside the watched window still exist; their hibernated records must not be dropped.
+        self.all_keys = {f"{self.prefix}:{s.session_id}" for w in self.app.terminal_windows for t in w.tabs for s in t.sessions}
         for wi, window in enumerate(self.windows()):
             for ti, tab in enumerate(window.tabs):
                 for si, s in enumerate(tab.sessions):
