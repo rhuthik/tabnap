@@ -115,6 +115,43 @@ class AdoptAndSnapshot(unittest.TestCase):
         self.assertEqual({r["session_id"] for r in rows}, {"s1", "s2"})
 
 
+class AwakeCap(unittest.TestCase):
+    def test_longest_idle_go_first_and_blocked_ones_stay(self):
+        e, _ = engine_with(FakeAgent())
+        e.cfg.max_awake = 2
+        e.rows = [
+            {"id": "a", "state": "working", "idle_min": None},
+            {"id": "b", "state": "idle", "idle_min": 5},
+            {"id": "c", "state": "idle", "idle_min": 50},
+            {"id": "d", "state": "idle", "idle_min": 90, "blocker": "kept awake"},
+            {"id": "e", "state": "idle", "idle_min": 20},
+            {"id": "z", "state": "hibernated"},
+        ]
+        self.assertEqual([r["id"] for r in e.over_cap()], ["c", "e", "b"][:3])
+        e.cfg.max_awake = 4
+        self.assertEqual([r["id"] for r in e.over_cap()], ["c"])
+        e.cfg.max_awake = 0
+        self.assertEqual(e.over_cap(), [])
+
+
+class ConfigFile(unittest.TestCase):
+    def test_set_value_round_trips_and_validates(self):
+        from tabnap import config
+        path = os.path.join(tempfile.mkdtemp(), "config.toml")
+        config.set_value("auto.max_awake", "6", path)
+        config.set_value("auto.agents", "claude", path)
+        config.set_value("features.context", "on", path)
+        config.set_value("claude.resume_by_dir", '{"~/p/*": "claude-{profile} --resume {id}"}', path)
+        c = config.load(path)
+        self.assertEqual((c.max_awake, c.auto_agents, c.context), (6, ["claude"], True))
+        self.assertEqual(c.claude_resume_by_dir, {"~/p/*": "claude-{profile} --resume {id}"})
+        for key, bad in (("idle_minutes", "0"), ("auto.agents", "claude,gemini"), ("features.context", "maybe")):
+            with self.assertRaises(ValueError):
+                config.set_value(key, bad, path)
+        with self.assertRaises(KeyError):
+            config.set_value("nope", "1", path)
+
+
 class ProcessIdentity(unittest.TestCase):
     def test_identity_is_stable_and_specific(self):
         me = procs.proc_start(os.getpid())

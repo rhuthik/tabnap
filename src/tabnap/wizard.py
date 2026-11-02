@@ -43,40 +43,6 @@ class Prompter:
             return default
 
 
-def render(c, auto_note=""):
-    def q(v):
-        return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-    lines = [
-        "# tabnap settings. Re-run `tabnap install` to answer the questions again, or edit this file",
-        "# and run `tabnap restart`.",
-        "",
-        f"idle_minutes = {c.idle_minutes:g}",
-        f"bloat_mb = {c.bloat_mb:g}",
-        f"port = {c.port}",
-        f"terminals = [{', '.join(q(t) for t in c.terminals)}]",
-        f"panel_title = {q(c.panel_title)}",
-        "",
-        "[features]",
-        f"context = {str(c.context).lower()}          # your last prompt + the agent's reply in the session list",
-        f"needs_pulse = {str(c.needs_pulse).lower()}      # blink tabs that finish or wait for you",
-        f"title_spinner = {str(c.title_spinner).lower()}    # iTerm2: animate working tab titles",
-        f"tab_icon = {str(c.tab_icon).lower()}         # iTerm2: sleeping icon on hibernated tabs",
-        "",
-        "[claude]",
-        f"config_dirs = [{', '.join(q(d) for d in c.claude_config_dirs)}]",
-        f"resume = {q(c.claude_resume)}",
-    ]
-    if c.claude_resume_by_dir:
-        lines += ["", "[claude.resume_by_dir]"] + [f"{q(k)} = {q(v)}" for k, v in c.claude_resume_by_dir.items()]
-    lines += ["", "[codex]", f"home = {q(c.codex_home.replace(HOME, '~', 1))}", f"resume = {q(c.codex_resume)}",
-              "", "[tmux]", f"sockets = [{', '.join(q(s) for s in c.tmux_sockets)}]",
-              "", "[iterm]", f"window = {q(c.iterm_window)}", f"icon = {q(c.iterm_icon.replace(HOME, '~', 1))}",
-              "", "[snapshot]", f"dir = {q(c.snapshot_dir.replace(HOME, '~', 1))}", f"name = {q(c.snapshot_name)}",
-              f"every_minutes = {c.snapshot_minutes:g}", f"keep = {c.snapshot_keep}", ""]
-    return "\n".join(lines)
-
-
 def tmux_conf_path():
     xdg = os.path.join(HOME, ".config/tmux/tmux.conf")
     return xdg if os.path.exists(xdg) and not os.path.exists(os.path.join(HOME, ".tmux.conf")) else \
@@ -132,6 +98,8 @@ def run(assume_yes=False):
     auto = p.ask("Auto-hibernate sessions that sit idle?", False)
     if auto:
         c.idle_minutes = p.number("  After how many idle minutes?", c.idle_minutes)
+        c.max_awake = int(p.number("  Also keep at most this many sessions awake? The longest-idle ones sleep first (0 = no cap)",
+                                   c.max_awake))
     c.context = p.ask("Show your last prompt and the agent's last reply in the session list?\n"
                       "  (read from the agent's local transcript; nothing leaves your machine)", c.context)
     c.needs_pulse = p.ask("Blink a tab when its agent finishes or needs you while you're in another tab?",
@@ -153,9 +121,7 @@ def run(assume_yes=False):
         print("  No terminal picked, so the daemon will have nothing to watch. tabnap supports iTerm2 and tmux"
               " (tmux runs inside any terminal).")
 
-    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-    with open(CONFIG_FILE, "w") as fh:
-        fh.write(render(c))
+    config.write(c)
     print(f"\nSaved your choices to {CONFIG_FILE}")
     from tabnap.engine import load_state, save_state
     st = load_state()

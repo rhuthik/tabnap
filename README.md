@@ -68,20 +68,35 @@ Drop `[iterm]` on Linux or if you only use tmux.
 
 ## Configure
 
-`tabnap install` writes `~/.config/tabnap/config.toml`. Edit it and run `tabnap restart`, or run `tabnap install` again.
+Every setting can be changed three ways, and changes apply without a restart:
 
-```toml
-idle_minutes = 40
+- the **gear** in the session panel;
+- `tabnap config` to list them, and `tabnap config set <key> <value>` to change one;
+- editing `~/.config/tabnap/config.toml` (or `tabnap config edit`).
 
-[features]
-context = false          # your last prompt + the agent's reply in the session list
-needs_pulse = true       # blink tabs that finish or wait for you
-title_spinner = true     # iTerm2: animate working tab titles
-tab_icon = true          # iTerm2: sleeping icon on hibernated tabs
-
-[claude.resume_by_dir]   # several Claude Code profiles? say how each one resumes
-"~/.claude-profiles/*" = "claude-{profile} --resume {id}"
+```sh
+tabnap config set idle_minutes 30
+tabnap config set auto.max_awake 6                   # cap: the longest-idle sessions sleep first
+tabnap config set auto.agents claude                 # only auto-hibernate Claude Code
+tabnap config set auto.skip_dirs "~/work/infra, ~/work/live-*"   # never auto-hibernate here
+tabnap config set features.context on               # show your last prompt and the reply
+tabnap auto on                                       # the auto-hibernate switch itself
 ```
+
+| Setting | Default | |
+|---|---|---|
+| `idle_minutes` | 40 | auto-hibernate after this many idle minutes |
+| `auto.max_awake` | 0 | keep at most N awake; idle ones (5+ min) sleep longest-idle first. 0 = no cap |
+| `auto.agents` | claude, codex | which agents auto-hibernate may touch |
+| `auto.skip_dirs` | – | folders auto-hibernate leaves alone (manual still works) |
+| `features.context` | off | your last prompt + the agent's reply in the session list |
+| `features.needs_pulse` | on | blink tabs that finish or wait for you |
+| `features.title_spinner` / `tab_icon` | on | iTerm2 tab decorations |
+| `panel_title` | Agent sessions | heading of the session list |
+| `claude.resume_by_dir` | – | how each Claude config dir resumes, e.g. `"~/.claude-profiles/*" = "claude-{profile} --resume {id}"` |
+| `snapshot.dir` | – | write every session and its resume command here every 15 min (crash insurance) |
+
+Per session: **pin** a session (📌 in the panel, `tabnap pin <tab>`) to keep it awake.
 
 Flags such as `--model`, `--permission-mode`, `--dangerously-skip-permissions` and `--add-dir` (Claude), and `-m`, `--profile`, `--sandbox` and `-c` (Codex), are carried over to the resume command.
 

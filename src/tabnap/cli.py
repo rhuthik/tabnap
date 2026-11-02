@@ -11,7 +11,7 @@
   tabnap panel              open the session panel in your browser
   tabnap setup tmux         status-line format + popup key for tmux
   tabnap setup iterm        add the Wake/Hibernate button to iTerm2 status bars
-  tabnap config             write an example config file
+  tabnap config             show every setting; `tabnap config set <key> <value>` changes one (applied live)
   tabnap doctor             check what tabnap can see
   tabnap start | stop       start the daemon now and at login / stop it (no questions asked)
   tabnap restart            restart the daemon (after editing the config)
@@ -21,6 +21,7 @@
 import asyncio
 import json
 import os
+import shlex
 import shutil
 import signal
 import sys
@@ -147,14 +148,65 @@ def cmd_setup(what):
     raise SystemExit("usage: tabnap setup tmux|iterm")
 
 
-def cmd_config():
-    if os.path.exists(CONFIG_FILE):
-        print(f"{CONFIG_FILE} already exists.")
-        return
-    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-    with open(CONFIG_FILE, "w") as fh:
-        fh.write(config.EXAMPLE)
-    print(f"Wrote {CONFIG_FILE}")
+def cmd_config(args):
+    """tabnap config [set <key> <value> | path | edit | init]"""
+    sub = args[0] if args else ""
+    if sub == "path":
+        return print(CONFIG_FILE)
+    if sub == "init":
+        if os.path.exists(CONFIG_FILE):
+            return print(f"{CONFIG_FILE} already exists.")
+        config.write(config.Config())
+        return print(f"Wrote {CONFIG_FILE}")
+    if sub == "edit":
+        if not os.path.exists(CONFIG_FILE):
+            config.write(config.load())
+        os.system(f"{os.environ.get('EDITOR', 'vi')} {shlex.quote(CONFIG_FILE)}")
+        return report_reload(try_api("/api/reload"))
+    if sub == "set":
+        if len(args) < 3:
+            raise SystemExit("usage: tabnap config set <key> <value>   (see `tabnap config` for keys)")
+        key, value = args[1], " ".join(args[2:])
+        result = try_api("/api/config", key=key, value=value)
+        if result is None:  # daemon not running: just save it
+            try:
+                config.set_value(key, value)
+            except (KeyError, ValueError) as e:
+                raise SystemExit(str(e).strip("'\""))
+            return print(f"Saved {key}. The daemon isn't running; it'll use this when it starts.")
+        return report_reload(result, key)
+    if sub:
+        raise SystemExit("usage: tabnap config [set <key> <value> | path | edit | init]")
+    cfg = config.load()
+    print(f"# {CONFIG_FILE}")
+    for key, value, help_, restart in config.describe(cfg):
+        shown = config.toml_value(value) if not isinstance(value, dict) else (json.dumps(value) if value else "{}")
+        print(f"{key:<24} = {shown:<28}  # {help_}{' (restart)' if restart else ''}")
+    st = try_api("/api/state", method="GET")
+    print(f"{'auto':<24} = {'on' if st and st.get('auto') else 'off':<28}  # the auto-hibernate switch: tabnap auto on|off")
+
+
+def try_api(path, method="POST", **params):
+    """api() that returns None when the daemon isn't running, and exits on a real error."""
+    if not os.path.exists(DAEMON_FILE):
+        return None
+    try:
+        return api(path, method=method, **params)
+    except SystemExit as e:
+        if "not reachable" in str(e) or "isn't running" in str(e):
+            return None
+        raise
+
+
+def report_reload(result, key=None):
+    if result is None:
+        return print("Saved. The daemon isn't running; it'll use this when it starts.")
+    restart = result.get("restart") or []
+    what = f"Saved {key}" if key else "Reloaded"
+    if restart:
+        print(f"{what}. These need a restart to take effect: {', '.join(restart)} (tabnap restart)")
+    else:
+        print(f"{what}; applied now.")
 
 
 def cmd_doctor():
@@ -207,7 +259,7 @@ def main(argv=None):
     if cmd == "setup" and args:
         return cmd_setup(args[0])
     if cmd == "config":
-        return cmd_config()
+        return cmd_config(args)
     if cmd == "doctor":
         return cmd_doctor()
     if cmd == "install":

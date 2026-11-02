@@ -63,6 +63,10 @@ def make_handler(engine, loop, token):
                     return self.reply(200, panel_html(token, engine.cfg.panel_title).encode(), "text/html; charset=utf-8")
                 if url.path == "/api/state":
                     return self.reply(200, engine.snapshot())
+                if url.path == "/api/config" and self.command == "GET":
+                    from tabnap import config
+                    return self.reply(200, {"settings": [
+                        {"key": k, "value": v, "help": h, "restart": r} for k, v, h, r in config.describe(engine.cfg)]})
                 if self.command != "POST":
                     return self.reply(405, {"error": "POST only"})
                 actions = {"/api/hibernate": engine.hibernate, "/api/wake": engine.wake,
@@ -83,6 +87,15 @@ def make_handler(engine, loop, token):
                     except ValueError:
                         return self.reply(400, {"error": "body must be JSON"})
                     engine.adopt(records)
+                elif url.path == "/api/config":
+                    from tabnap import config
+                    try:
+                        config.set_value(q.get("key", ""), q.get("value", ""))
+                    except (KeyError, ValueError) as e:
+                        return self.reply(400, {"error": str(e).strip("'\"")})
+                    return self.reply(200, {"ok": True, "restart": self.run(engine.reload())})
+                elif url.path == "/api/reload":
+                    return self.reply(200, {"ok": True, "restart": self.run(engine.reload())})
                 elif url.path == "/api/revert":
                     self.run(engine.revert_all())
                 else:

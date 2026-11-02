@@ -19,6 +19,7 @@ from tabnap.terminals.base import PLACEHOLDER_TITLES, Look, is_shell
 TICK_SECONDS = 3
 MEM_SECONDS = 60
 PULSE_SECONDS = 0.8
+CAP_MIN_IDLE = 5  # minutes a session must be idle before max_awake may put it to sleep
 GLYPH_RE = re.compile(r"^[^\w\s(\[\"'`]{1,2}\s+")
 
 
@@ -38,12 +39,16 @@ def fmt_minutes(m):
     return f"{m // 1440}d"
 
 
-def auto_decision(f, now, idle_minutes):
+def auto_decision(f, now, cfg):
     """(blocker, minutes_left). blocker is a reason auto-hibernate won't run; minutes_left <= 0 means due."""
     if f["pinned"]:
         return "kept awake", None
     if f["status"] in ("working", "waiting"):
         return f["status"], None
+    if f["agent"] not in cfg.auto_agents:
+        return f"auto is off for {f['agent']}", None
+    if cfg.skipped_dir(f["cwd"]):
+        return "folder skipped by auto", None
     if not f["transcript"]:
         return "nothing to resume yet", None
     if not f["confident"]:
@@ -54,7 +59,7 @@ def auto_decision(f, now, idle_minutes):
         return f"uses {f['loop_tool']}", None
     if f["focused"]:
         return "tab in focus", None
-    return None, idle_minutes - (now - f["last_active"]) / 60
+    return None, cfg.idle_minutes - (now - f["last_active"]) / 60
 
 
 def cd_arg(path):
@@ -244,9 +249,9 @@ class Engine:
             "background": agent.background(table, kids, info.pid) or bool(native.get("background_tasks")),
             "loop_tool": agent.loop_tool(info.transcript) if info.transcript else None,
             "pinned": info.session_id in self.state["pinned"], "focused": pane.focused,
-            "last_active": last_active,
+            "last_active": last_active, "agent": agent.name, "cwd": info.cwd,
         }
-        blocker, left = auto_decision(facts, now, self.cfg.idle_minutes)
+        blocker, left = auto_decision(facts, now, self.cfg)
         mem = sum(self.mem.get(p, 0) for p in [info.pid] + procs.descendants(kids, info.pid))
         prev, prev_at = self.prev_status.get(key), self.prev_status_at.get(key)
         self.prev_status[key], self.prev_status_at[key] = status, info.status_at
@@ -333,6 +338,27 @@ class Engine:
                 await self.hibernate(row["id"], reason="auto", strict=True)
             except ActionError as e:
                 log(f"auto-hibernate skipped {row['title']}: {e}")
+        for row in self.over_cap():
+            if not self.state["auto"]:
+                return
+            try:
+                await self.hibernate(row["id"], reason=f"auto (more than {self.cfg.max_awake} awake)", strict=True)
+            except ActionError as e:
+                log(f"auto-hibernate skipped {row['title']}: {e}")
+
+    def over_cap(self):
+        """Idle sessions to put to sleep so no more than max_awake stay awake: the longest-idle first, idle
+        at least CAP_MIN_IDLE minutes, and only ones auto-hibernate could take anyway (same rules)."""
+        if self.cfg.max_awake <= 0:
+            return []
+        awake = [r for r in self.rows if r.get("state") in ("working", "waiting", "idle") and r["id"] not in self.acting]
+        excess = len(awake) - self.cfg.max_awake
+        if excess <= 0:
+            return []
+        candidates = [r for r in awake if r["state"] == "idle" and not r.get("blocker")
+                      and (r.get("idle_min") or 0) >= CAP_MIN_IDLE]
+        candidates.sort(key=lambda r: -(r.get("idle_min") or 0))
+        return candidates[:excess]
 
     # --- actions ---
 
@@ -587,6 +613,24 @@ class Engine:
             except Exception as e:  # pylint: disable=broad-except
                 log(f"snapshot failed: {type(e).__name__}: {e}")
             await asyncio.sleep(self.cfg.snapshot_minutes * 60)
+
+    async def reload(self):
+        """Re-read the config file and apply it now. Returns the changed keys that need a restart."""
+        from tabnap import config
+        new = config.load()
+        changed = [st for st in config.SETTINGS if getattr(new, st.attr) != getattr(self.cfg, st.attr)]
+        for st in changed:
+            if not st.restart:
+                setattr(self.cfg, st.attr, getattr(new, st.attr))  # terminals share this object, so they see it too
+        if not self.cfg.context:
+            self.cache = {k: v for k, v in self.cache.items() if k[0] != "ctx"}
+        for term in self.terminals:
+            if term.up:
+                await term.on_config(self.cfg, [st.key for st in changed])
+        self.nudge()
+        if changed:
+            log(f"config reloaded: {', '.join(st.key for st in changed)}")
+        return [st.key for st in changed if st.restart]
 
     async def revert_all(self):
         for pane in self.panes.values():

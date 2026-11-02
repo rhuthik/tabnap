@@ -4,13 +4,14 @@ import unittest
 from tabnap import procs
 from tabnap.agents import top_level
 from tabnap.agents.base import kept_flags
+from tabnap.config import Config
 from tabnap.engine import auto_decision, fmt_minutes, strip_glyph
 from tabnap.terminals.tmux import parse_panes, strip_faint
 
 
 def facts(**over):
     f = {"pinned": False, "status": "idle", "transcript": "/t.jsonl", "confident": True, "background": False,
-         "loop_tool": None, "focused": False, "last_active": 1000.0}
+         "loop_tool": None, "focused": False, "last_active": 1000.0, "agent": "claude", "cwd": "/w/app"}
     f.update(over)
     return f
 
@@ -37,12 +38,12 @@ class Format(unittest.TestCase):
 
 class AutoDecision(unittest.TestCase):
     def test_due_after_idle_minutes(self):
-        blocker, left = auto_decision(facts(last_active=0), now=41 * 60, idle_minutes=40)
+        blocker, left = auto_decision(facts(last_active=0), now=41 * 60, cfg=Config(idle_minutes=40))
         self.assertIsNone(blocker)
         self.assertLessEqual(left, 0)
 
     def test_countdown_before_due(self):
-        blocker, left = auto_decision(facts(last_active=0), now=10 * 60, idle_minutes=40)
+        blocker, left = auto_decision(facts(last_active=0), now=10 * 60, cfg=Config(idle_minutes=40))
         self.assertIsNone(blocker)
         self.assertAlmostEqual(left, 30)
 
@@ -53,7 +54,15 @@ class AutoDecision(unittest.TestCase):
                           ({"background": True}, "background job running"),
                           ({"loop_tool": "ScheduleWakeup"}, "uses ScheduleWakeup"),
                           ({"focused": True}, "tab in focus")]:
-            self.assertEqual(auto_decision(facts(last_active=0, **over), 99999, 40)[0], why)
+            self.assertEqual(auto_decision(facts(last_active=0, **over), 99999, Config())[0], why)
+
+    def test_agent_and_folder_rules(self):
+        cfg = Config(auto_agents=["claude"], skip_dirs=["~/work/keep-*", "/w/app"])
+        self.assertEqual(auto_decision(facts(agent="codex"), 99999, cfg)[0], "auto is off for codex")
+        self.assertEqual(auto_decision(facts(cwd="/w/app/sub"), 99999, cfg)[0], "folder skipped by auto")
+        home = __import__("os").path.expanduser("~")
+        self.assertEqual(auto_decision(facts(cwd=home + "/work/keep-me"), 99999, cfg)[0], "folder skipped by auto")
+        self.assertIsNone(auto_decision(facts(cwd="/w/application"), 99999, cfg)[0])
 
 
 class Processes(unittest.TestCase):

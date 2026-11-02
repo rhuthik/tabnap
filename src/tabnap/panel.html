@@ -47,15 +47,29 @@
   .zf.b { animation-delay:1s; font-size:7px; } .zf.c { animation-delay:2s; font-size:6px; }
   @keyframes zf { 0% { transform:translate(5px,1px); opacity:0 } 25% { opacity:1 } 100% { transform:translate(12px,-12px); opacity:0 } }
   .waking { animation:pulse .8s ease-in-out infinite; }
+  .title { display:flex; align-items:center; justify-content:space-between; }
+  .gear { border:0; background:none; padding:2px; cursor:pointer; color:var(--muted); display:grid; }
+  .gear:hover, .gear.on { color:var(--text); }
+  #settings { display:none; padding:6px 10px 10px; border-bottom:1px solid var(--line); background:var(--row); }
+  #settings.open { display:block; }
+  .set { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 0; font-size:11px; }
+  .set .h { color:var(--muted); font-size:10px; margin-top:1px; }
+  .set input[type=number] { width:52px; } .set input[type=text] { width:150px; }
+  .set input[type=number], .set input[type=text] { background:var(--bg); color:var(--text); border:1px solid var(--line);
+      border-radius:5px; padding:3px 5px; font:inherit; }
+  .set label { margin-left:8px; white-space:nowrap; }
+  .set-foot { color:var(--muted); font-size:10px; padding-top:6px; }
+  #toast.ok { background:var(--green); }
   #toast { position:fixed; left:8px; right:8px; bottom:8px; background:var(--err); color:#fff; padding:7px 9px; border-radius:6px; font-size:11px; display:none; }
   .empty { padding:14px 10px; color:var(--muted); }
 </style></head>
 <body>
 <header>
-  <div><b>__TITLE__</b></div>
+  <div class="title"><b>__TITLE__</b><button class="gear" id="gear" title="Settings"><svg width="14" height="14" viewBox="0 0 16 16"><path fill="currentColor" d="M9.4 1l.3 1.9c.4.2.8.4 1.2.7l1.8-.7 1.4 2.4-1.5 1.2v1.4l1.5 1.2-1.4 2.4-1.8-.7c-.4.3-.8.5-1.2.7L9.4 15H6.6l-.3-1.9c-.4-.2-.8-.4-1.2-.7l-1.8.7-1.4-2.4 1.5-1.2V8.1L1.9 6.9l1.4-2.4 1.8.7c.4-.3.8-.5 1.2-.7L6.6 1h2.8zM8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg></button></div>
   <div class="sum" id="sum">loading…</div>
   <div class="auto"><span id="autolabel">Auto-hibernate</span><button class="sw" id="auto" title="Auto-hibernate idle sessions"></button></div>
 </header>
+<div id="settings"></div>
 <div id="list"></div>
 <div id="toast"></div>
 <script>
@@ -87,7 +101,52 @@ async function post(path, params) {
   refresh();
 }
 let toastTimer;
-function toast(msg) { const el = document.getElementById("toast"); el.textContent = msg; el.style.display = "block"; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.style.display = "none", 4000); }
+function toast(msg, ok) { const el = document.getElementById("toast"); el.textContent = msg; el.classList.toggle("ok", !!ok); el.style.display = "block"; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.style.display = "none", ok ? 1800 : 4000); }
+// Settings view: a curated subset of `tabnap config`, saved through /api/config and applied live.
+const SHOWN = [
+  ["idle_minutes", "Auto-hibernate after (minutes)", "number"],
+  ["auto.max_awake", "Keep at most this many awake (0 = no limit)", "number"],
+  ["auto.agents", "Auto-hibernate these agents", "agents"],
+  ["auto.skip_dirs", "Never auto-hibernate in (folders, comma separated)", "text"],
+  ["features.context", "Show your last prompt and the reply", "switch"],
+  ["features.needs_pulse", "Blink tabs that need you", "switch"],
+  ["features.title_spinner", "Animate working tab titles (iTerm2)", "switch"],
+  ["features.tab_icon", "Sleeping icon on hibernated tabs (iTerm2)", "switch"],
+  ["panel_title", "Panel title", "text"],
+];
+async function saveSetting(key, value) {
+  const q = new URLSearchParams({t: T, key, value});
+  const r = await fetch("/api/config?" + q, {method: "POST"});
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(body.error || ("HTTP " + r.status)); return loadSettings(); }
+  toast(body.restart && body.restart.length ? "Saved; takes effect after tabnap restart" : "Saved", true);
+  if (key === "panel_title") document.querySelector(".title b").textContent = value;
+  refresh();
+}
+async function loadSettings() {
+  const r = await fetch("/api/config?t=" + T, {cache: "no-store"});
+  if (!r.ok) return;
+  const vals = Object.fromEntries((await r.json()).settings.map(x => [x.key, x.value]));
+  const box = document.getElementById("settings");
+  box.innerHTML = SHOWN.map(([key, label, kind]) => {
+    const v = vals[key];
+    let ctl = "";
+    if (kind === "switch") ctl = `<button class="sw ${v ? "on" : ""}" data-key="${key}" data-kind="switch"></button>`;
+    else if (kind === "number") ctl = `<input type="number" min="0" step="1" value="${esc(v)}" data-key="${key}">`;
+    else if (kind === "agents") ctl = ["claude", "codex"].map(a => `<label><input type="checkbox" data-key="${key}" data-agent="${a}" ${v.includes(a) ? "checked" : ""}> ${LABEL[a]}</label>`).join("");
+    else ctl = `<input type="text" value="${esc(Array.isArray(v) ? v.join(", ") : v)}" data-key="${key}">`;
+    return `<div class="set"><div>${esc(label)}</div><div>${ctl}</div></div>`;
+  }).join("") + `<div class="set-foot">Everything else: <code>tabnap config</code> in a terminal.</div>`;
+}
+document.addEventListener("change", e => {
+  const el = e.target;
+  if (!el.dataset || !el.dataset.key) return;
+  if (el.dataset.agent) {
+    const picked = [...document.querySelectorAll(`[data-key="${el.dataset.key}"][data-agent]`)].filter(x => x.checked).map(x => x.dataset.agent);
+    return saveSetting(el.dataset.key, picked.join(","));
+  }
+  saveSetting(el.dataset.key, el.value);
+});
 function meta(r) {
   if (r.needs === "done") return `finished · needs you · ${r.mem_mb} MB`;
   if (r.state === "hibernated") return `hibernated ${mins(r.asleep_min)} · ${r.freed_mb} MB freed`;
@@ -159,11 +218,19 @@ document.addEventListener("click", e => {
   const sw = e.target.closest("[data-sw]"), pin = e.target.closest("[data-pin]"), rf = e.target.closest("[data-rf]");
   const row = e.target.closest(".row");
   if (rf) { e.stopPropagation(); return post("/api/refresh", {id: rf.dataset.rf}); }
+  if (e.target.closest("#gear")) {
+    const box = document.getElementById("settings"), open = !box.classList.contains("open");
+    box.classList.toggle("open", open); document.getElementById("gear").classList.toggle("on", open);
+    return open ? loadSettings() : null;
+  }
+  const setSw = e.target.closest('#settings .sw');
+  if (setSw) { setSw.classList.toggle("on"); return saveSetting(setSw.dataset.key, setSw.classList.contains("on") ? "on" : "off"); }
   if (e.target.closest("#auto")) return post("/api/auto", {on: document.getElementById("auto").classList.contains("on") ? "0" : "1"});
   if (sw) { e.stopPropagation(); return post("/api/toggle", {id: sw.dataset.sw}); }
   if (pin) { e.stopPropagation(); return post(pin.classList.contains("on") ? "/api/unpin" : "/api/pin", {id: pin.dataset.pin}); }
   if (row) return post("/api/focus", {id: row.dataset.id});
 });
 refresh(); setInterval(refresh, 1500);
+if (location.hash === "#settings") document.getElementById("gear").click();
 </script>
 </body></html>

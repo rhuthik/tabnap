@@ -68,6 +68,7 @@ class ITerm(Terminal):
     async def start(self, engine):
         if not iterm_running():
             return False  # don't let the API's AppleScript cookie request launch iTerm
+        self.engine = engine
         self.conn = await iterm2.Connection.async_create()
         self.app = await iterm2.async_get_app(self.conn)
         self.icon = self.cfg.iterm_icon if self.cfg.iterm_icon and os.path.exists(self.cfg.iterm_icon) else ICON_PATH
@@ -88,6 +89,16 @@ class ITerm(Terminal):
         await iterm2.tool.async_register_web_view_tool(
             self.conn, self.cfg.panel_title, TOOL_ID, False, f"http://127.0.0.1:{engine.port}/panel?t={engine.token}")
         return True
+
+    async def on_config(self, cfg, changed_keys):
+        if "panel_title" in changed_keys:  # same tool id, new name in View > Toolbelt
+            await iterm2.tool.async_register_web_view_tool(
+                self.conn, cfg.panel_title, TOOL_ID, False, f"http://127.0.0.1:{self.engine.port}/panel?t={self.engine.token}")
+        if "features.title_spinner" in changed_keys and not cfg.title_spinner:
+            for sid, look in list(self.looks.items()):  # put plain titles back on tabs mid-spin
+                s = self.app.get_session_by_id(sid)
+                if s and look.state == "working" and look.title:
+                    await self.set_name(s, look.title)
 
     def session(self, pane):
         return self.app.get_session_by_id(pane.ref)
@@ -232,6 +243,8 @@ class ITerm(Terminal):
                 await self.set_name(s, name)
             if self.cfg.tab_icon:
                 await self.set_icon(s, True)
+            elif seen.get("icon"):
+                await self.set_icon(s, False)
             await self.push(s, "status", look.status_text, lambda: self.set_status(s, look.status_text, PURPLE))
             await self.set_var(s, BAR_VAR, look.bar)
             return

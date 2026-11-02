@@ -1,5 +1,11 @@
-"""Paths and settings. Settings come from ~/.config/tabnap/config.toml; every key is optional."""
+"""Paths and settings. Settings live in ~/.config/tabnap/config.toml; every key is optional.
+
+SETTINGS is the single list of settings: loading, `tabnap config`, `tabnap config set`, the panel's
+settings view and the file tabnap writes all come from it.
+"""
+import fnmatch
 import glob
+import json
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -19,57 +25,67 @@ TOKEN_FILE = os.path.join(STATE_DIR, "token")
 LOG_FILE = os.path.join(STATE_DIR, "daemon.log")
 ICON_PATH = os.path.join(STATE_DIR, "sleeping.png")
 
-EXAMPLE = """\
-# tabnap settings. Every key is optional; these are the defaults.
+AGENT_NAMES = ("claude", "codex")
 
-idle_minutes = 40        # auto-hibernate after this long idle (when auto is switched on)
-bloat_mb = 1500          # flag a session for a refresh above this much memory
-port = 47817             # local HTTP API and panel (127.0.0.1 only, token protected)
-terminals = ["iterm", "tmux"]
-panel_title = "Agent sessions"   # heading of the session list (iTerm2 Toolbelt, browser panel, tabnap top)
 
-[features]
-context = false          # show your last prompt and the agent's last reply in the panel and `tabnap top`
-needs_pulse = true       # blink a tab when its agent finishes or waits for you while you're elsewhere
-title_spinner = true     # iTerm2: animate the titles of working tabs
-tab_icon = true          # iTerm2: a sleeping icon on hibernated tabs
+@dataclass(frozen=True)
+class Setting:
+    key: str          # dotted TOML path
+    attr: str         # Config attribute
+    kind: str         # float | int | str | bool | list | path | dict
+    help: str
+    restart: bool = False   # takes effect after `tabnap restart` (everything else applies live)
 
-[claude]
-# Extra Claude Code config dirs (globs ok). ~/.claude and each process's CLAUDE_CONFIG_DIR are always checked.
-config_dirs = []
-# Command used to resume. {id} = session id, {config_dir} = its config dir, {profile} = basename of it.
-# A non-default config dir gets CLAUDE_CONFIG_DIR=... prepended unless the template mentions {config_dir} or {profile}.
-resume = "claude --resume {id}"
-# Per config dir overrides, e.g. shell wrappers that pick a profile:
-# [claude.resume_by_dir]
-# "~/.claude-profiles/*" = "claude-{profile} --resume {id}"
 
-[codex]
-home = "~/.codex"
-resume = "codex resume {id}"
-
-[tmux]
-sockets = []             # extra tmux sockets (-L names or -S paths); the default server is always checked
-
-[iterm]
-window = ""              # limit tabnap to one iTerm window id (useful for trying it out)
-icon = ""                # PNG for hibernated tabs (default: a sleeping moon)
-
-[snapshot]
-dir = ""                 # write every session + its resume command here, for crash recovery (off when empty)
-name = "tabnap-%Y%m%d-%H%M.json"
-every_minutes = 15
-keep = 3
-"""
+SETTINGS = [
+    Setting("idle_minutes", "idle_minutes", "float", "auto-hibernate a session after this many idle minutes"),
+    Setting("bloat_mb", "bloat_mb", "float", "suggest a refresh when a session uses more than this many MB"),
+    Setting("panel_title", "panel_title", "str", "heading of the session list (iTerm2 Toolbelt, browser panel, tabnap top)"),
+    Setting("port", "port", "int", "local API and panel port (127.0.0.1 only)", restart=True),
+    Setting("terminals", "terminals", "list", "terminals to watch: iterm, tmux", restart=True),
+    Setting("auto.max_awake", "max_awake", "int",
+            "when auto is on, keep at most this many sessions awake; the longest-idle ones sleep first (0 = no limit)"),
+    Setting("auto.agents", "auto_agents", "list", "agents auto-hibernate may put to sleep: claude, codex"),
+    Setting("auto.skip_dirs", "skip_dirs", "list", "never auto-hibernate sessions in these folders (globs ok; manual still works)"),
+    Setting("features.context", "context", "bool", "show your last prompt and the agent's last reply in the session list"),
+    Setting("features.needs_pulse", "needs_pulse", "bool", "blink a tab when its agent finishes or waits for you"),
+    Setting("features.title_spinner", "title_spinner", "bool", "iTerm2: animate the titles of working tabs"),
+    Setting("features.tab_icon", "tab_icon", "bool", "iTerm2: a sleeping icon on hibernated tabs"),
+    Setting("claude.config_dirs", "claude_config_dirs", "list",
+            "extra Claude Code config dirs (globs ok); ~/.claude and each process's CLAUDE_CONFIG_DIR are always checked"),
+    Setting("claude.resume", "claude_resume", "str",
+            "resume command; {id} session id, {config_dir}, {profile} = basename of the config dir"),
+    Setting("claude.resume_by_dir", "claude_resume_by_dir", "dict",
+            "per config dir resume commands, e.g. \"~/.claude-profiles/*\" = \"claude-{profile} --resume {id}\""),
+    Setting("codex.home", "codex_home", "path", "Codex home (CODEX_HOME)"),
+    Setting("codex.resume", "codex_resume", "str", "resume command; {id} = thread id"),
+    Setting("tmux.sockets", "tmux_sockets", "list", "extra tmux sockets (-L names or -S paths); the default server is always checked",
+            restart=True),
+    Setting("iterm.window", "iterm_window", "str", "limit tabnap to one iTerm2 window id (for trying it out)", restart=True),
+    Setting("iterm.icon", "iterm_icon", "path", "PNG for hibernated tabs (empty: a sleeping moon)", restart=True),
+    Setting("snapshot.dir", "snapshot_dir", "path", "write every session + its resume command here for crash recovery (empty: off)",
+            restart=True),
+    Setting("snapshot.name", "snapshot_name", "str", "snapshot file name (strftime)"),
+    Setting("snapshot.every_minutes", "snapshot_minutes", "float", "minutes between snapshots"),
+    Setting("snapshot.keep", "snapshot_keep", "int", "snapshots to keep"),
+]
+BY_KEY = {s.key: s for s in SETTINGS}
 
 
 @dataclass
 class Config:
     idle_minutes: float = 40
     bloat_mb: float = 1500
+    panel_title: str = "Agent sessions"
     port: int = 47817
     terminals: list = field(default_factory=lambda: ["iterm", "tmux"])
-    panel_title: str = "Agent sessions"
+    max_awake: int = 0
+    auto_agents: list = field(default_factory=lambda: list(AGENT_NAMES))
+    skip_dirs: list = field(default_factory=list)
+    context: bool = False
+    needs_pulse: bool = True
+    title_spinner: bool = True
+    tab_icon: bool = True
     claude_config_dirs: list = field(default_factory=list)
     claude_resume: str = "claude --resume {id}"
     claude_resume_by_dir: dict = field(default_factory=dict)
@@ -82,10 +98,6 @@ class Config:
     snapshot_name: str = "tabnap-%Y%m%d-%H%M.json"
     snapshot_minutes: float = 15
     snapshot_keep: int = 3
-    context: bool = False
-    needs_pulse: bool = True
-    title_spinner: bool = True
-    tab_icon: bool = True
 
     def claude_dirs(self):
         dirs = [os.path.join(HOME, ".claude")]
@@ -93,34 +105,78 @@ class Config:
             dirs += sorted(glob.glob(os.path.expanduser(pattern)))
         return [d for d in dict.fromkeys(dirs) if os.path.isdir(d)]
 
+    def skipped_dir(self, cwd):
+        """True when auto-hibernate should leave sessions in `cwd` alone (the folder or anything under it)."""
+        for pattern in self.skip_dirs:
+            p = os.path.expanduser(pattern).rstrip("/")
+            if cwd and (fnmatch.fnmatch(cwd, p) or fnmatch.fnmatch(cwd, p + "/*")):
+                return True
+        return False
 
-def load(path=CONFIG_FILE):
+
+def coerce(setting, value):
+    """Turn a TOML value or a command-line string into the setting's type; ValueError if it doesn't fit."""
+    kind = setting.kind
+    if kind == "bool":
+        if isinstance(value, bool):
+            return value
+        v = str(value).strip().lower()
+        if v in ("1", "true", "yes", "on"):
+            return True
+        if v in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"{setting.key}: expected on/off")
+    if kind in ("float", "int"):
+        n = (float if kind == "float" else int)(value)
+        if n < 0:
+            raise ValueError(f"{setting.key}: must not be negative")
+        if setting.key == "idle_minutes" and n <= 0:
+            raise ValueError("idle_minutes: must be more than 0")
+        return n
+    if kind == "list":
+        if isinstance(value, str):
+            text = value.strip()
+            value = json.loads(text) if text.startswith("[") else [v.strip() for v in text.split(",") if v.strip()]
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise ValueError(f"{setting.key}: expected a list of strings")
+        if setting.key == "auto.agents" and not set(value) <= set(AGENT_NAMES):
+            raise ValueError(f"auto.agents: only {', '.join(AGENT_NAMES)}")
+        return value
+    if kind == "dict":
+        if isinstance(value, str):
+            value = json.loads(value)
+        if not isinstance(value, dict):
+            raise ValueError(f"{setting.key}: expected a table / JSON object")
+        return {str(k): str(v) for k, v in value.items()}
+    if kind == "path":
+        return os.path.expanduser(str(value)) if value else ""
+    return str(value)
+
+
+def _dig(raw, key):
+    node = raw
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None, False
+        node = node[part]
+    return node, True
+
+
+def load(path=None):
+    path = path or CONFIG_FILE
     try:
         with open(path, "rb") as fh:
             raw = tomllib.load(fh)
     except FileNotFoundError:
         raw = {}
     c = Config()
-    for key in ("idle_minutes", "bloat_mb", "port", "terminals", "panel_title"):
-        if key in raw:
-            setattr(c, key, raw[key])
-    for key, value in raw.get("features", {}).items():
-        if key in ("context", "needs_pulse", "title_spinner", "tab_icon"):
-            setattr(c, key, bool(value))
-    claude, codex = raw.get("claude", {}), raw.get("codex", {})
-    c.claude_config_dirs = list(claude.get("config_dirs", []))
-    c.claude_resume = claude.get("resume", c.claude_resume)
-    c.claude_resume_by_dir = dict(claude.get("resume_by_dir", {}))
-    c.codex_home = os.path.expanduser(codex.get("home", c.codex_home))
-    c.codex_resume = codex.get("resume", c.codex_resume)
-    c.tmux_sockets = list(raw.get("tmux", {}).get("sockets", []))
-    c.iterm_window = str(raw.get("iterm", {}).get("window", ""))
-    c.iterm_icon = os.path.expanduser(str(raw.get("iterm", {}).get("icon", "")))
-    snap = raw.get("snapshot", {})
-    c.snapshot_dir = os.path.expanduser(str(snap.get("dir", "")))
-    c.snapshot_name = str(snap.get("name", c.snapshot_name))
-    c.snapshot_minutes = float(snap.get("every_minutes", c.snapshot_minutes))
-    c.snapshot_keep = int(snap.get("keep", c.snapshot_keep))
+    for s in SETTINGS:
+        value, found = _dig(raw, s.key)
+        if found:
+            try:
+                setattr(c, s.attr, coerce(s, value))
+            except (ValueError, TypeError):
+                pass  # a bad value keeps the default rather than stopping the daemon
     for env, key, cast in (("TABNAP_IDLE_MINUTES", "idle_minutes", float), ("TABNAP_PORT", "port", int),
                            ("TABNAP_BLOAT_MB", "bloat_mb", float), ("TABNAP_ITERM_WINDOW", "iterm_window", str)):
         if os.environ.get(env):
@@ -130,3 +186,64 @@ def load(path=CONFIG_FILE):
     if os.environ.get("TABNAP_TMUX_SOCKETS"):
         c.tmux_sockets = os.environ["TABNAP_TMUX_SOCKETS"].split(",")
     return c
+
+
+def toml_value(v):
+    if isinstance(v, bool):
+        return str(v).lower()
+    if isinstance(v, (int, float)):
+        return f"{v:g}" if isinstance(v, float) else str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(toml_value(x) for x in v) + "]"
+    if isinstance(v, str):
+        if v.startswith(HOME + "/"):
+            v = "~" + v[len(HOME):]
+        return json.dumps(v, ensure_ascii=False)
+    raise TypeError(type(v))
+
+
+def render(c):
+    """The whole config file for `c`, every setting with its help line."""
+    lines = ["# tabnap settings. Change them with `tabnap config set <key> <value>` (applied live),",
+             "# from the panel's gear, or by editing this file and running `tabnap restart`.", ""]
+    section = ""
+    for s in SETTINGS:
+        sec, _, name = s.key.rpartition(".")
+        value = getattr(c, s.attr)
+        if s.kind == "dict":
+            lines += ["", f"# {s.help}", f"[{s.key}]"]
+            lines += [f"{json.dumps(k)} = {toml_value(v)}" for k, v in value.items()]
+            section = s.key
+            continue
+        if sec != section:
+            lines += ["", f"[{sec}]"]
+            section = sec
+        lines.append(f"{name} = {toml_value(value)}  # {s.help}{' (restart)' if s.restart else ''}")
+    return "\n".join(lines).lstrip("\n").replace("\n\n\n", "\n\n") + "\n"
+
+
+def write(c, path=None):
+    path = path or CONFIG_FILE
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w") as fh:
+        fh.write(render(c))
+    os.replace(path + ".tmp", path)
+
+
+def set_value(key, value, path=None):
+    """Validate and save one setting. Returns (new Config, Setting)."""
+    if key not in BY_KEY:
+        raise KeyError(f"unknown setting {key!r}; see `tabnap config`")
+    s = BY_KEY[key]
+    c = load(path)
+    setattr(c, s.attr, coerce(s, value))
+    write(c, path)
+    return c, s
+
+
+def describe(c):
+    """[(key, value, help, restart)] for listings."""
+    return [(s.key, getattr(c, s.attr), s.help, s.restart) for s in SETTINGS]
+
+
+EXAMPLE = render(Config())

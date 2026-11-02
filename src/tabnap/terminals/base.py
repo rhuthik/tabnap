@@ -82,3 +82,6 @@ class Terminal:
 
     async def revert_all(self):
         pass
+
+    async def on_config(self, cfg, changed_keys):
+        """Settings changed while running (cfg is already updated)."""
