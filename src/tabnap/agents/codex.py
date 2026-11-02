@@ -169,7 +169,8 @@ class Codex(Agent):
 
     def resume_command(self, cfg, sid, argv=(), extra=None):
         flags = kept_flags(list(argv[1:]), self.keep_flags)
-        return f"{cfg.codex_resume.format(id=sid)} {flags}".strip()
+        base = cfg.codex_resume.format(id=sid) if sid else " ".join(cfg.codex_resume.replace("{id}", "").split())
+        return f"{base} {flags}".strip()  # no id: `codex resume` opens its picker
 
     def title(self, live):
         t = (live.extra.get("title") or "").strip()

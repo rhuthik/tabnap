@@ -191,6 +191,7 @@ class CodexScreen(unittest.TestCase):
         self.assertEqual(self.c.exit_line(lines), 1)
         cmd = self.c.resume_command(Config(), "abc", ["codex", "-m", "gpt-x", "--yolo", "-C", "/x", "do it"])
         self.assertEqual(cmd, "codex resume abc -m gpt-x --yolo")
+        self.assertEqual(self.c.resume_command(Config(), None, ["codex", "--yolo"]), "codex resume --yolo")  # picker
 
     def test_matches(self):
         self.assertTrue(self.c.matches(["node", "/u/bin/codex", "-m", "x"]))

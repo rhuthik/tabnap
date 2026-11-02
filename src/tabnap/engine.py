@@ -344,18 +344,15 @@ class Engine:
             raise ActionError(f"{agent.label} is {facts['status']}; wait until it's idle")
         if not info.session_id:
             raise ActionError("no conversation yet, so there's nothing to resume")
-        lines, _ = await term.screen(pane, drop_faint=True)
-        why = agent.input_blocker(lines)
-        if why and (strict or why == "draft in input box" or agent.quit_with == "keys"):
-            raise ActionError(f"not now: {why}")
+        if facts["background"]:
+            raise ActionError("a background job is running under it; stop it first")
+        if strict and not info.confident:
+            raise ActionError("not sure which session this is")
         self.acting.add(key)
         self.needs.pop(key, None)
         try:
             if key in self.lit:
                 await self.set_pulse(pane, False)
-            again = agent.inspect(pid, self.cfg)  # pids get reused: re-check identity right before quitting it
-            if agent.quit_with == "signal" and (not again.session_id or again.session_id != info.session_id):
-                raise ActionError(f"the {agent.label} process changed under us; try again")
             table = procs.process_table()
             tree = procs.descendants(procs.children_map(table), pid)
             parent = table.get(pid, (None,))[0]
@@ -366,6 +363,7 @@ class Engine:
             freed = round(sum(self.mem.get(p, 0) for p in [pid] + tree))
             title = self.title_for(pane, info)
             cwd = info.cwd or os.path.expanduser("~")
+            await self.recheck(pane, info, table, starts[pid])  # last look, right before quitting
             await self.quit(pane, agent, pid, starts[pid])
             for p in tree:  # MCP servers normally exit with the agent; stop stragglers that are still the same process
                 if procs.alive(p) and starts[p] and procs.proc_start(p) == starts[p]:
@@ -387,9 +385,14 @@ class Engine:
                 log(f"{agent.label} printed session {printed}, we had guessed {sid}; using the printed one")
                 sid = printed
                 command = agent.resume_command(self.cfg, sid, info.extra.get("argv", ()), info.extra)
+            elif not printed and not info.confident:
+                log(f"{agent.label} exited without printing its session and our match was a guess; "
+                    f"leaving its session picker instead of a possibly wrong id")
+                sid = None
+                command = agent.resume_command(self.cfg, None, info.extra.get("argv", ()), info.extra)
             self.state["tabs"][key] = {
                 "agent": agent.name, "session_id": sid, "cwd": cwd, "command": command,
-                "transcript": info.transcript if sid == info.session_id else None,
+                "transcript": info.transcript if sid and sid == info.session_id else None,
                 "title": title, "hibernated_at": time.time(), "freed_mb": freed, "reason": reason,
             }
             save_state(self.state)
@@ -399,25 +402,44 @@ class Engine:
             self.acting.discard(key)
             self.nudge()
 
+    async def recheck(self, pane, info, table, start):
+        """Everything that must still hold at the moment of quitting: same process, same session, idle,
+        nothing typed or open on screen. Statuses from the last tick can be up to 3s old."""
+        agent, pid = info.agent, info.pid
+        if procs.proc_start(pid) != start:
+            raise ActionError(f"the {agent.label} process changed under us; try again")
+        again = agent.inspect(pid, self.cfg)
+        if again.session_id != info.session_id:
+            raise ActionError(f"the {agent.label} session changed under us; try again")
+        native = await pane.term.agent_status(pane) if agent.name == "claude" else {}
+        status = native.get("status") if native.get("status") in ("working", "waiting", "idle") else again.status
+        if status != "idle":
+            raise ActionError(f"{agent.label} just became {status}; left it alone")
+        if agent.background(table, procs.children_map(table), pid):
+            raise ActionError("a background job is running under it; stop it first")
+        lines, _ = await pane.term.screen(pane, drop_faint=True)
+        why = agent.input_blocker(lines)
+        if why:
+            raise ActionError(f"not now: {why}")
+
     async def quit(self, pane, agent, pid, start):
+        """Ask the agent to exit and wait. No SIGTERM fallback: an agent that ignores Ctrl-C may be
+        mid-shutdown or showing something, so it is left running and you are told."""
         def same():
             return procs.alive(pid) and procs.proc_start(pid) == start
         if agent.quit_with == "signal":
             os.kill(pid, signal.SIGINT)
         else:
             await pane.term.send(pane, "\x03")
-        for i in range(50):
+        for i in range(100):
             await asyncio.sleep(0.1)
             if not same():
                 return
             if i == 15 and agent.quit_with == "keys":
-                await pane.term.send(pane, "\x03")  # some versions want a second Ctrl-C to confirm
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(50):
-            await asyncio.sleep(0.1)
-            if not same():
-                return
-        raise ActionError(f"{agent.label} (pid {pid}) didn't exit after Ctrl-C and SIGTERM; left it running")
+                lines, _ = await pane.term.screen(pane)
+                if any("ctrl" in l.lower() and "again" in l.lower() for l in lines[-6:]):
+                    await pane.term.send(pane, "\x03")  # a version that asks for a second Ctrl-C to confirm
+        raise ActionError(f"{agent.label} (pid {pid}) didn't exit after Ctrl-C; left it running")
 
     async def wait_for_prompt(self, pane):
         """Screen lines once the shell is back and its prompt has drawn (or after ~6s). Typing before the

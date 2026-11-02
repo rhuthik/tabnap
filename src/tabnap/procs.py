@@ -171,8 +171,15 @@ def _proc_cwd(pid):
 
 
 def proc_start(pid):
-    """Start time as text; compared before signalling so a reused pid is never hit."""
-    return run(["ps", "-o", "lstart=", "-p", str(pid)]).strip()
+    """A process identity to compare before signalling, so a reused pid is never hit: start time in
+    clock ticks on Linux; on macOS start time (to the second) plus the full command line."""
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                return fh.read().rsplit(")", 1)[1].split()[19]  # field 22, starttime
+        except (OSError, IndexError):
+            return ""
+    return run(["ps", "-o", "lstart=,command=", "-p", str(pid)]).strip()
 
 
 def proc_start_epoch(pid):
@@ -184,7 +191,7 @@ def _proc_start_epoch(pid):
     out = run(["ps", "-o", "etimes=", "-p", str(pid)]).strip() if sys.platform.startswith("linux") else ""
     if out.isdigit():
         return time.time() - int(out)
-    text = proc_start(pid)
+    text = run(["ps", "-o", "lstart=", "-p", str(pid)]).strip()
     if not text:
         return None
     try:

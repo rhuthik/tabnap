@@ -1,6 +1,7 @@
 """Run the daemon at login: a LaunchAgent on macOS, a systemd user unit on Linux."""
 import os
 import shutil
+from xml.sax.saxutils import escape
 import subprocess
 import sys
 
@@ -17,10 +18,16 @@ def program():
     return [exe, "daemon"] if exe else [sys.executable, "-m", "tabnap", "daemon"]
 
 
+def systemd_quote(arg):
+    """One ExecStart argument: quoted, with systemd's own specifiers (% and $) escaped."""
+    arg = arg.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$")
+    return f'"{arg}"'
+
+
 def install():
     os.makedirs(STATE_DIR, exist_ok=True)
     if sys.platform == "darwin":
-        args = "".join(f"<string>{a}</string>" for a in program())
+        args = "".join(f"<string>{escape(a)}</string>" for a in program())
         plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -30,8 +37,8 @@ def install():
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>15</integer>
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>{PATH}</string></dict>
-  <key>StandardOutPath</key><string>{LOG_FILE}</string>
-  <key>StandardErrorPath</key><string>{LOG_FILE}</string>
+  <key>StandardOutPath</key><string>{escape(LOG_FILE)}</string>
+  <key>StandardErrorPath</key><string>{escape(LOG_FILE)}</string>
 </dict></plist>
 """
         os.makedirs(os.path.dirname(PLIST), exist_ok=True)
@@ -45,7 +52,7 @@ def install():
 Description=tabnap: hibernate idle AI agent sessions in terminal tabs
 
 [Service]
-ExecStart={' '.join(program())}
+ExecStart={' '.join(systemd_quote(a) for a in program())}
 Restart=always
 RestartSec=15
 Environment=PATH={PATH}
