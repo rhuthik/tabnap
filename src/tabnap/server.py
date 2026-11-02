@@ -1,5 +1,6 @@
 """Local HTTP API for the panel, the CLI and `tabnap top`. 127.0.0.1 only, every request needs the token."""
 import asyncio
+import html
 import json
 import os
 import secrets
@@ -14,8 +15,9 @@ from tabnap.config import DAEMON_FILE, LOG_FILE, STATE_DIR, TOKEN_FILE
 from tabnap.engine import ActionError, log
 
 
-def panel_html(token):
-    return resources.files("tabnap").joinpath("panel.html").read_text("utf-8").replace("__TOKEN__", token)
+def panel_html(token, title):
+    page = resources.files("tabnap").joinpath("panel.html").read_text("utf-8")
+    return page.replace("__TOKEN__", token).replace("__TITLE__", html.escape(title))
 
 
 def load_token():
@@ -58,7 +60,7 @@ def make_handler(engine, loop, token):
             key = q.get("id", "")
             try:
                 if url.path == "/panel":
-                    return self.reply(200, panel_html(token).encode(), "text/html; charset=utf-8")
+                    return self.reply(200, panel_html(token, engine.cfg.panel_title).encode(), "text/html; charset=utf-8")
                 if url.path == "/api/state":
                     return self.reply(200, engine.snapshot())
                 if self.command != "POST":

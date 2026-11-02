@@ -1,7 +1,7 @@
 """iTerm2, through its Python API (Settings > General > Magic > Enable Python API).
 
 Hibernated tabs get a "zz <title>" name, a sleeping icon and a purple status line; working tabs get a
-spinner; tabs that need you blink. A Toolbelt panel (View > Toolbelt > tabnap) lists every session,
+spinner; tabs that need you blink. A Toolbelt panel (View > Toolbelt > Agent sessions) lists every session,
 and `tabnap setup iterm` adds a Wake/Hibernate button to the status bar.
 """
 import asyncio
@@ -86,7 +86,7 @@ class ITerm(Terminal):
 
         await tabnap_toggle.async_register(self.conn)
         await iterm2.tool.async_register_web_view_tool(
-            self.conn, "tabnap", TOOL_ID, False, f"http://127.0.0.1:{engine.port}/panel?t={engine.token}")
+            self.conn, self.cfg.panel_title, TOOL_ID, False, f"http://127.0.0.1:{engine.port}/panel?t={engine.token}")
         return True
 
     def session(self, pane):

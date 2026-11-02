@@ -50,7 +50,7 @@ def draw(scr, st, sel, frame, msg):
             except curses.error:
                 pass
 
-    head = (f" tabnap   {st['awake']} awake · {st['asleep']} asleep · {gb(st['in_use_mb'])} in use · "
+    head = (f" {st.get('title') or 'tabnap'}   {st['awake']} awake · {st['asleep']} asleep · {gb(st['in_use_mb'])} in use · "
             f"{gb(st['freed_mb'])} freed")
     put(0, 0, head, curses.A_BOLD)
     auto = f"auto-hibernate {'on' if st['auto'] else 'off'} ({st['idle_minutes']:g}m) "

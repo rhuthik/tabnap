@@ -26,6 +26,7 @@ idle_minutes = 40        # auto-hibernate after this long idle (when auto is swi
 bloat_mb = 1500          # flag a session for a refresh above this much memory
 port = 47817             # local HTTP API and panel (127.0.0.1 only, token protected)
 terminals = ["iterm", "tmux"]
+panel_title = "Agent sessions"   # heading of the session list (iTerm2 Toolbelt, browser panel, tabnap top)
 
 [features]
 context = false          # show your last prompt and the agent's last reply in the panel and `tabnap top`
@@ -68,6 +69,7 @@ class Config:
     bloat_mb: float = 1500
     port: int = 47817
     terminals: list = field(default_factory=lambda: ["iterm", "tmux"])
+    panel_title: str = "Agent sessions"
     claude_config_dirs: list = field(default_factory=list)
     claude_resume: str = "claude --resume {id}"
     claude_resume_by_dir: dict = field(default_factory=dict)
@@ -99,7 +101,7 @@ def load(path=CONFIG_FILE):
     except FileNotFoundError:
         raw = {}
     c = Config()
-    for key in ("idle_minutes", "bloat_mb", "port", "terminals"):
+    for key in ("idle_minutes", "bloat_mb", "port", "terminals", "panel_title"):
         if key in raw:
             setattr(c, key, raw[key])
     for key, value in raw.get("features", {}).items():

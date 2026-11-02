@@ -142,7 +142,7 @@ def cmd_setup(what):
         from tabnap.terminals.iterm import install_status_bar_button
         import iterm2
         iterm2.run_until_complete(install_status_bar_button)
-        print("Sidebar panel: View > Toolbelt > tabnap.")
+        print(f"Sidebar panel: View > Toolbelt > {config.load().panel_title}.")
         return
     raise SystemExit("usage: tabnap setup tmux|iterm")
 

@@ -64,7 +64,7 @@ Drop `[iterm]` on Linux or if you only use tmux.
 | `tabnap doctor` | what tabnap can see, if something looks off |
 
 **tmux:** `prefix + N` opens the session list in a popup. Hibernated windows show `zz <title>` in the status line.
-**iTerm2:** View → Toolbelt → **tabnap** for the sidebar. The status-bar button reads `✳ Idle 12m · Hibernate` or `zz Hibernated · ▶ Wake`; click it to toggle.
+**iTerm2:** View → Toolbelt → **Agent sessions** for the sidebar (rename it with `panel_title`). The status-bar button reads `✳ Idle 12m · Hibernate` or `zz Hibernated · ▶ Wake`; click it to toggle.
 
 ## Configure
 

@@ -667,7 +667,7 @@ class Engine:
             "awake": len(awake), "asleep": len(rows) - len(awake),
             "in_use_mb": sum(r["mem_mb"] for r in awake),
             "freed_mb": sum(r.get("freed_mb") or 0 for r in rows if r["state"] == "hibernated"),
-            "terminals": [t.kind for t in self.terminals if t.up],
+            "terminals": [t.kind for t in self.terminals if t.up], "title": self.cfg.panel_title,
         }
 
 

@@ -55,6 +55,7 @@ def render(c, auto_note=""):
         f"bloat_mb = {c.bloat_mb:g}",
         f"port = {c.port}",
         f"terminals = [{', '.join(q(t) for t in c.terminals)}]",
+        f"panel_title = {q(c.panel_title)}",
         "",
         "[features]",
         f"context = {str(c.context).lower()}          # your last prompt + the agent's reply in the session list",
@@ -179,5 +180,5 @@ def run(assume_yes=False):
                 print("iTerm2: open iTerm2, then run `tabnap setup iterm` to add the status bar button.")
         except ImportError:
             print("iTerm2 support needs the extra: uv tool install 'tabnap[iterm]' (or pipx install 'tabnap[iterm]').")
-        print("iTerm2 sidebar: View > Toolbelt > tabnap.")
+        print(f"iTerm2 sidebar: View > Toolbelt > {c.panel_title}.")
     print("\nTry it: tabnap status · tabnap top · tabnap panel")
