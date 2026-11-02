@@ -14,6 +14,17 @@ from tabnap.terminals.base import Pane, Terminal
 RULE = "─" * 20
 
 
+def setUpModule():
+    # Never touch the real state file: point it at a temp dir for the whole module.
+    global _patch
+    _patch = mock.patch("tabnap.engine.STATE_FILE", os.path.join(tempfile.mkdtemp(), "state.json"))
+    _patch.start()
+
+
+def tearDownModule():
+    _patch.stop()
+
+
 class FakeAgent(Agent):
     name, label, quit_with = "fake", "Fake", "signal"
 
@@ -43,9 +54,7 @@ class FakeTerm(Terminal):
 
 
 def engine_with(agent, background=False):
-    state_dir = tempfile.mkdtemp()
-    with mock.patch("tabnap.engine.STATE_FILE", os.path.join(state_dir, "state.json")):
-        e = Engine(Config(), [FakeTerm()])
+    e = Engine(Config(), [FakeTerm()])
     term = e.terminals[0]
     pane = Pane(key="fake:1", tty=None, name="t", focused=False, shell=False, order=(), term=term)
     pid = os.getpid()  # a real, live process that must never be signalled by these tests

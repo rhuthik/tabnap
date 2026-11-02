@@ -71,7 +71,8 @@ def log(msg):
     print(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} {msg}", flush=True)
 
 
-def load_state(path=STATE_FILE):
+def load_state(path=None):
+    path = path or STATE_FILE
     try:
         with open(path) as fh:
             st = json.load(fh)
@@ -83,7 +84,8 @@ def load_state(path=STATE_FILE):
     return st
 
 
-def save_state(st, path=STATE_FILE):
+def save_state(st, path=None):
+    path = path or STATE_FILE
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as fh:

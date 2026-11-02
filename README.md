@@ -60,6 +60,7 @@ Drop `[iterm]` on Linux or if you only use tmux.
 | `tabnap pin <tab>` | never auto-hibernate this one (`unpin` to undo) |
 | `tabnap auto on\|off` | auto-hibernate switch |
 | `tabnap panel` | the session panel in your browser |
+| `tabnap start` / `stop` / `restart` | run the daemon now and at login / stop it / restart after a config edit |
 | `tabnap doctor` | what tabnap can see, if something looks off |
 
 **tmux:** `prefix + N` opens the session list in a popup. Hibernated windows show `zz <title>` in the status line.

@@ -13,6 +13,7 @@
   tabnap setup iterm        add the Wake/Hibernate button to iTerm2 status bars
   tabnap config             write an example config file
   tabnap doctor             check what tabnap can see
+  tabnap start | stop       start the daemon now and at login / stop it (no questions asked)
   tabnap restart            restart the daemon (after editing the config)
   tabnap daemon             run in the foreground (what install runs)
   tabnap uninstall          stop the daemon and take decorations off
@@ -26,7 +27,7 @@ import sys
 import webbrowser
 
 from tabnap import __version__, config, procs, service
-from tabnap.config import CONFIG_FILE, DAEMON_FILE, STATE_DIR
+from tabnap.config import CONFIG_FILE, DAEMON_FILE, LOG_FILE, STATE_DIR
 from tabnap.engine import Engine, fmt_minutes, log
 from tabnap.server import api
 
@@ -212,6 +213,12 @@ def main(argv=None):
     if cmd == "install":
         from tabnap import wizard
         return wizard.run(assume_yes="--yes" in args or "-y" in args)
+    if cmd == "start":
+        path = service.install()
+        return print(f"Daemon running and starting at login ({path}); log: {LOG_FILE}")
+    if cmd == "stop":
+        path = service.uninstall()
+        return print(f"Daemon stopped and won't start at login ({path} removed). Decorations stay; tabnap start brings it back.")
     if cmd == "restart":
         return print("Restarted." if service.restart() else "No tabnap service to restart (run tabnap install).")
     if cmd == "uninstall":
