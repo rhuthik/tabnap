@@ -52,6 +52,13 @@ sockets = []             # extra tmux sockets (-L names or -S paths); the defaul
 
 [iterm]
 window = ""              # limit tabnap to one iTerm window id (useful for trying it out)
+icon = ""                # PNG for hibernated tabs (default: a sleeping moon)
+
+[snapshot]
+dir = ""                 # write every session + its resume command here, for crash recovery (off when empty)
+name = "tabnap-%Y%m%d-%H%M.json"
+every_minutes = 15
+keep = 3
 """
 
 
@@ -68,6 +75,11 @@ class Config:
     codex_resume: str = "codex resume {id}"
     tmux_sockets: list = field(default_factory=list)
     iterm_window: str = ""
+    iterm_icon: str = ""
+    snapshot_dir: str = ""
+    snapshot_name: str = "tabnap-%Y%m%d-%H%M.json"
+    snapshot_minutes: float = 15
+    snapshot_keep: int = 3
     context: bool = False
     needs_pulse: bool = True
     title_spinner: bool = True
@@ -101,6 +113,12 @@ def load(path=CONFIG_FILE):
     c.codex_resume = codex.get("resume", c.codex_resume)
     c.tmux_sockets = list(raw.get("tmux", {}).get("sockets", []))
     c.iterm_window = str(raw.get("iterm", {}).get("window", ""))
+    c.iterm_icon = os.path.expanduser(str(raw.get("iterm", {}).get("icon", "")))
+    snap = raw.get("snapshot", {})
+    c.snapshot_dir = os.path.expanduser(str(snap.get("dir", "")))
+    c.snapshot_name = str(snap.get("name", c.snapshot_name))
+    c.snapshot_minutes = float(snap.get("every_minutes", c.snapshot_minutes))
+    c.snapshot_keep = int(snap.get("keep", c.snapshot_keep))
     for env, key, cast in (("TABNAP_IDLE_MINUTES", "idle_minutes", float), ("TABNAP_PORT", "port", int),
                            ("TABNAP_BLOAT_MB", "bloat_mb", float), ("TABNAP_ITERM_WINDOW", "iterm_window", str)):
         if os.environ.get(env):

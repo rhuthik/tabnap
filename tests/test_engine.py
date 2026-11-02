@@ -78,6 +78,34 @@ class HibernateSafety(unittest.TestCase):
         self.assertIn("background job", self.run_hibernate(FakeAgent(), background=True))
 
 
+class AdoptAndSnapshot(unittest.TestCase):
+    def test_adopt_validates_and_fills_defaults(self):
+        e, _ = engine_with(FakeAgent())
+        with mock.patch("tabnap.engine.save_state"):
+            e.adopt({"iterm:abc": {"agent": "claude", "session_id": "s9", "command": "claude --resume s9"}})
+            with self.assertRaises(ActionError):
+                e.adopt({"iterm:x": {"agent": "nope", "command": "rm -rf /"}})
+        rec = e.state["tabs"]["iterm:abc"]
+        self.assertEqual((rec["title"], rec["reason"], rec["freed_mb"]), ("s9", "adopted", 0))
+        self.assertNotIn("iterm:x", e.state["tabs"])
+
+    def test_snapshot_writes_and_prunes(self):
+        e, _ = engine_with(FakeAgent())
+        e.cfg.snapshot_dir = tempfile.mkdtemp()
+        e.cfg.snapshot_keep = 2
+        for n in ("snap-20260101-0000.json", "snap-20260101-0001.json", "snap-20260101-0002.json"):
+            open(os.path.join(e.cfg.snapshot_dir, n), "w").write("[]")
+        e.cfg.snapshot_name = "snap-%Y%m%d-%H%M.json"
+        e.state["tabs"]["fake:2"] = {"agent": "claude", "session_id": "s2", "cwd": "/w", "command": "claude --resume s2",
+                                     "title": "Asleep"}
+        e.write_snapshot()
+        files = sorted(os.listdir(e.cfg.snapshot_dir))
+        self.assertEqual(len(files), 2)
+        import json
+        rows = json.load(open(os.path.join(e.cfg.snapshot_dir, files[-1])))
+        self.assertEqual({r["session_id"] for r in rows}, {"s1", "s2"})
+
+
 class ProcessIdentity(unittest.TestCase):
     def test_identity_is_stable_and_specific(self):
         me = procs.proc_start(os.getpid())

@@ -1,6 +1,7 @@
 """The terminal- and agent-agnostic part: find agent sessions, decide, hibernate, wake."""
 import asyncio
 import datetime
+import glob
 import json
 import os
 import re
@@ -392,6 +393,7 @@ class Engine:
                 command = agent.resume_command(self.cfg, None, info.extra.get("argv", ()), info.extra)
             self.state["tabs"][key] = {
                 "agent": agent.name, "session_id": sid, "cwd": cwd, "command": command,
+                "config_dir": info.extra.get("config_dir"),
                 "transcript": info.transcript if sid and sid == info.session_id else None,
                 "title": title, "hibernated_at": time.time(), "freed_mb": freed, "reason": reason,
             }
@@ -529,6 +531,60 @@ class Engine:
         if not pane:
             raise ActionError("tab not found")
         await pane.term.focus(pane)
+
+    def adopt(self, records):
+        """Take over tabs another tool restored still hibernated: {pane key: record}."""
+        if not isinstance(records, dict):
+            raise ActionError("expected {pane key: record}")
+        for key, rec in records.items():
+            if not (isinstance(key, str) and isinstance(rec, dict) and isinstance(rec.get("command"), str)
+                    and rec.get("agent") in BY_NAME):
+                raise ActionError(f"bad record for {key!r}")
+            rec.setdefault("title", (rec.get("session_id") or "session")[:8])
+            rec.setdefault("cwd", os.path.expanduser("~"))
+            rec.setdefault("hibernated_at", time.time())
+            rec.setdefault("freed_mb", 0)
+            rec.setdefault("reason", "adopted")
+            rec.setdefault("session_id", None)
+            self.state["tabs"][key] = rec
+        save_state(self.state)
+        self.nudge()
+
+    def write_snapshot(self):
+        """Every session with its resume command, from what the daemon already knows (no extra scans)."""
+        rows = []
+        for key, (pane, info, _facts) in self.live.items():
+            if info.session_id:
+                rows.append({"terminal": pane.term.kind, "tty": os.path.basename(pane.tty or ""), "pid": info.pid,
+                             "agent": info.agent.name, "session_id": info.session_id, "cwd": info.cwd,
+                             "command": info.resume, "title": self.title_for(pane, info), "hibernated": False})
+        for key, hib in self.state["tabs"].items():
+            pane = self.panes.get(key)
+            rows.append({"terminal": key.split(":", 1)[0], "tty": os.path.basename((pane.tty if pane else "") or ""),
+                         "pid": None, "agent": hib["agent"], "session_id": hib["session_id"], "cwd": hib["cwd"],
+                         "command": hib["command"], "title": hib["title"], "hibernated": True})
+        if not rows:
+            return
+        rows.sort(key=lambda r: r["tty"])
+        os.makedirs(self.cfg.snapshot_dir, exist_ok=True)
+        path = os.path.join(self.cfg.snapshot_dir, datetime.datetime.now().strftime(self.cfg.snapshot_name))
+        with open(path + ".tmp", "w") as fh:
+            json.dump(rows, fh, indent=1)
+        os.replace(path + ".tmp", path)
+        pattern = re.sub(r"%[a-zA-Z]", "*", self.cfg.snapshot_name)
+        for old in sorted(glob.glob(os.path.join(self.cfg.snapshot_dir, pattern)))[:-max(1, self.cfg.snapshot_keep)]:
+            os.remove(old)
+
+    async def run_snapshots(self):
+        if not self.cfg.snapshot_dir:
+            return
+        await asyncio.sleep(60)  # let the first ticks fill in titles
+        while True:
+            try:
+                self.write_snapshot()
+            except Exception as e:  # pylint: disable=broad-except
+                log(f"snapshot failed: {type(e).__name__}: {e}")
+            await asyncio.sleep(self.cfg.snapshot_minutes * 60)
 
     async def revert_all(self):
         for pane in self.panes.values():

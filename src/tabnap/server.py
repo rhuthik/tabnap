@@ -72,6 +72,15 @@ def make_handler(engine, loop, token):
                     engine.set_pin(key, url.path == "/api/pin")
                 elif url.path == "/api/auto":
                     engine.set_auto(q.get("on") == "1")
+                elif url.path == "/api/adopt":
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if length > 1 << 20:
+                        return self.reply(413, {"error": "too large"})
+                    try:
+                        records = json.loads(self.rfile.read(length) or b"{}")
+                    except ValueError:
+                        return self.reply(400, {"error": "body must be JSON"})
+                    engine.adopt(records)
                 elif url.path == "/api/revert":
                     self.run(engine.revert_all())
                 else:

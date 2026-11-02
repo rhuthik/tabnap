@@ -61,6 +61,7 @@ class ITerm(Terminal):
         self.looks = {}      # session id -> last Look, for the spinner
         self.base_props = {} # (profile guid, key) -> value in the tab's own profile, to restore on wake
         self.frame = 0
+        self.icon = ICON_PATH
 
     # --- connection ---
 
@@ -69,6 +70,7 @@ class ITerm(Terminal):
             return False  # don't let the API's AppleScript cookie request launch iTerm
         self.conn = await iterm2.Connection.async_create()
         self.app = await iterm2.async_get_app(self.conn)
+        self.icon = self.cfg.iterm_icon if self.cfg.iterm_icon and os.path.exists(self.cfg.iterm_icon) else ICON_PATH
         write_icon(ICON_PATH)
         await self.adopt_existing_decorations()
 
@@ -194,7 +196,7 @@ class ITerm(Terminal):
             p = iterm2.LocalWriteOnlyProfile({"Icon": await self.base_value(s, "Icon", 1)})
             if sleeping:
                 p.set_icon_mode(iterm2.profile.IconMode.CUSTOM)
-                p.set_custom_icon_path(ICON_PATH)
+                p.set_custom_icon_path(self.icon)
             await s.async_set_profile_properties(p)
         await self.push(s, "icon", sleeping, setter)
 
@@ -280,7 +282,8 @@ class ITerm(Terminal):
             # Raw value: the library's title_components getter rejects bits newer than it knows.
             if p.all_properties.get("Title Components") == iterm2.profile.TitleComponents.SESSION_NAME.value:
                 seen["title_mode"] = True
-            if getattr(p, "custom_icon_path", None) == ICON_PATH and p.icon_mode == iterm2.profile.IconMode.CUSTOM:
+            if getattr(p, "custom_icon_path", None) in (ICON_PATH, self.icon) and \
+                    p.icon_mode == iterm2.profile.IconMode.CUSTOM:
                 seen["icon"] = True
             tab = p.all_properties.get("Tab Color") or {}
             if p.all_properties.get("Use Tab Color") and \

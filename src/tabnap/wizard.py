@@ -70,7 +70,9 @@ def render(c, auto_note=""):
         lines += ["", "[claude.resume_by_dir]"] + [f"{q(k)} = {q(v)}" for k, v in c.claude_resume_by_dir.items()]
     lines += ["", "[codex]", f"home = {q(c.codex_home.replace(HOME, '~', 1))}", f"resume = {q(c.codex_resume)}",
               "", "[tmux]", f"sockets = [{', '.join(q(s) for s in c.tmux_sockets)}]",
-              "", "[iterm]", f"window = {q(c.iterm_window)}", ""]
+              "", "[iterm]", f"window = {q(c.iterm_window)}", f"icon = {q(c.iterm_icon.replace(HOME, '~', 1))}",
+              "", "[snapshot]", f"dir = {q(c.snapshot_dir.replace(HOME, '~', 1))}", f"name = {q(c.snapshot_name)}",
+              f"every_minutes = {c.snapshot_minutes:g}", f"keep = {c.snapshot_keep}", ""]
     return "\n".join(lines)
 
 

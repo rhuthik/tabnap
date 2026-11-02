@@ -58,7 +58,7 @@ async def daemon_main():
     engine.token = token
     log(f"tabnap {__version__} up on 127.0.0.1:{engine.port}; {len(engine.state['tabs'])} hibernated tab(s) on "
         f"record; auto={'on' if engine.state['auto'] else 'off'}; terminals: {', '.join(t.kind for t in engine.terminals)}")
-    await asyncio.gather(engine.run_mem(), engine.run_ticks(), engine.run_pulse())
+    await asyncio.gather(engine.run_mem(), engine.run_ticks(), engine.run_pulse(), engine.run_snapshots())
 
 
 def single_instance():
