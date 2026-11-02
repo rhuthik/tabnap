@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- iTerm2: Codex tabs with an empty input box were treated as having a draft, so Sleep all idle and
+  auto-hibernate skipped them (iTerm2 reports blank cells as NUL).
+
 ## 0.1.0 (2026-11-02)
 
 First release.

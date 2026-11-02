@@ -134,7 +134,8 @@ class ITerm(Terminal):
     async def screen(self, pane, drop_faint=False):
         c = await self.session(pane).async_get_screen_contents()
         lines = [c.line(i) for i in range(c.number_of_lines)]
-        return [unfaint(l) if drop_faint else l.string for l in lines], c.cursor_coord.y
+        # iTerm2 gives never-written cells as NUL; agents' checks expect spaces.
+        return [(unfaint(l) if drop_faint else l.string).replace("\0", " ") for l in lines], c.cursor_coord.y
 
     async def shell_ready(self, pane):
         s = self.session(pane)

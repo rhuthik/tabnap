@@ -4,7 +4,7 @@
 
 You keep a dozen agent tabs open, and each idle one still holds 150–500 MB (more once MCP servers and slow leaks pile up). tabnap quits an idle agent cleanly. The tab stays where it was, with the resume command already typed at the prompt. Press Enter, or click Wake, and you're back in the same conversation.
 
-![tabnap in tmux: two sessions put to sleep, one woken again](docs/demo.gif)
+![tabnap in iTerm2: one session put to sleep from the panel, then Sleep all idle, then one woken with Enter](docs/hero.gif)
 
 On the author's machine, 17 hibernated Claude Code tabs freed **6.2 GB**.
 
@@ -66,6 +66,9 @@ Drop `[iterm]` on Linux or if you only use tmux.
 | `tabnap snapshot` | the latest crash snapshot as paste-able `cd … && claude --resume …` lines |
 
 **tmux:** `prefix + N` opens the session list in a popup. Hibernated windows show `zz <title>` in the status line.
+
+![tabnap in tmux: two sessions put to sleep, one woken again](docs/demo.gif)
+
 **iTerm2:** View → Toolbelt → **Agent sessions** for the sidebar (rename it with `panel_title`). The status-bar button reads `✳ Idle 12m · Hibernate` or `zz Hibernated · ▶ Wake`; click it to toggle.
 
 ## Configure
