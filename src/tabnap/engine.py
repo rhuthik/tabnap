@@ -525,6 +525,7 @@ class Engine:
             raise ActionError("the tab is running something else; finish it first")
         hib["waking_at"] = time.time()
         save_state(self.state)
+        await self.hibernated_row(pane, hib, time.time())  # waking look first: it must land before the agent starts
         # Ctrl-U clears whatever is on the prompt line (normally our pre-typed command).
         await pane.term.send(pane, f"\x15cd {cd_arg(hib['cwd'])} && {hib['command']}\r")
         log(f"waking {hib['agent']} {hib['session_id']} ({hib['title']})")

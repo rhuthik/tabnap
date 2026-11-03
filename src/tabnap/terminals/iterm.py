@@ -240,7 +240,9 @@ class ITerm(Terminal):
             return
         self.looks[sid] = look
         if look.state in ("hibernated", "waking"):
-            await self.set_title_mode(s, True)
+            # Put the title setting back before the agent starts: iTerm2 adds its own title bits at
+            # agent start and restores what it saw then on exit, so restoring later would wipe them.
+            await self.set_title_mode(s, look.state == "hibernated")
             name = f"{'…' if look.state == 'waking' else 'zz'} {look.title}"
             if pane.name != name:
                 await self.set_name(s, name)
