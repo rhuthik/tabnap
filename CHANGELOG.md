@@ -4,6 +4,8 @@
 
 - iTerm2: a tab woken after a daemon restart could show just "claude" instead of its title. The
   title setting is now restored before the agent starts, so iTerm2's own title bits survive.
+- iTerm2: a daemon restart could strip the title of an awake agent tab (it mistook the tab's title
+  setting for a hibernated tab's).
 - iTerm2: Codex tabs with an empty input box were treated as having a draft, so Sleep all idle and
   auto-hibernate skipped them (iTerm2 reports blank cells as NUL).
 

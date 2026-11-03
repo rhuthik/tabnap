@@ -298,7 +298,9 @@ class ITerm(Terminal):
                 continue
             seen = self.applied.setdefault(s.session_id, {})
             # Raw value: the library's title_components getter rejects bits newer than it knows.
-            if p.all_properties.get("Title Components") == iterm2.profile.TitleComponents.SESSION_NAME.value:
+            # Only tabs we have asleep: an awake tab can hold this value too, and "restoring" it breaks its title.
+            if p.all_properties.get("Title Components") == iterm2.profile.TitleComponents.SESSION_NAME.value and \
+                    f"{self.prefix}:{s.session_id}" in self.engine.state["tabs"]:
                 seen["title_mode"] = True
             if getattr(p, "custom_icon_path", None) in (ICON_PATH, self.icon) and \
                     p.icon_mode == iterm2.profile.IconMode.CUSTOM:
