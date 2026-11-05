@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- iTerm2: reconnect after iTerm2 restarts or updates. The iterm2 library kept the first auth cookie,
+  which iTerm2 rejects once used, so the daemon stayed disconnected until restarted.
+- iTerm2: a session resumed by hand (not through tabnap) keeps its title.
 - iTerm2: a tab woken after a daemon restart could show just "claude" instead of its title. The
   title setting is now restored before the agent starts, so iTerm2's own title bits survive.
 - iTerm2: a daemon restart could strip the title of an awake agent tab (it mistook the tab's title

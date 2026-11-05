@@ -69,6 +69,11 @@ class ITerm(Terminal):
         if not iterm_running():
             return False  # don't let the API's AppleScript cookie request launch iTerm
         self.engine = engine
+        if getattr(self, "conn", None):
+            # Reconnecting (iTerm2 restarted or updated): the library keeps the first cookie in the
+            # environment, and a used cookie is rejected, so drop it and let it ask iTerm2 for a new one.
+            os.environ.pop("ITERM2_COOKIE", None)
+            os.environ.pop("ITERM2_KEY", None)
         self.conn = await iterm2.Connection.async_create()
         self.app = await iterm2.async_get_app(self.conn)
         self.icon = self.cfg.iterm_icon if self.cfg.iterm_icon and os.path.exists(self.cfg.iterm_icon) else ICON_PATH
@@ -190,6 +195,9 @@ class ITerm(Terminal):
                 value = iterm2.profile.TitleComponents.SESSION_NAME.value
             else:
                 value = saved.pop("title_before", None) or await self.base_value(s, "Title Components", 3)
+                # If the agent is already running, iTerm2 has added bits of its own (2048 and up); keep them.
+                now = (await s.async_get_profile()).all_properties.get("Title Components") or 0
+                value |= now & ~0x7FF
             await s.async_set_profile_properties(iterm2.LocalWriteOnlyProfile({"Title Components": value}))
         await self.push(s, "title_mode", hibernated, setter)
 
