@@ -169,6 +169,19 @@ class ConfigFile(unittest.TestCase):
             config.set_value("nope", "1", path)
 
 
+class Connect(unittest.TestCase):
+    def test_hanging_terminal_start_times_out_and_retries_later(self):
+        class Hangs(FakeTerm):
+            async def start(self, engine):
+                await asyncio.sleep(3600)
+        e = Engine(Config(), [Hangs()])
+        with mock.patch("tabnap.engine.CONNECT_TIMEOUT", 0.05), mock.patch("tabnap.engine.log"):
+            asyncio.run(asyncio.wait_for(e.connect(), 2))
+        term = e.terminals[0]
+        self.assertFalse(term.up)
+        self.assertIn(term, e.retry_at)
+
+
 class ProcessIdentity(unittest.TestCase):
     def test_identity_is_stable_and_specific(self):
         me = procs.proc_start(os.getpid())

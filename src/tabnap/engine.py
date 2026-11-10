@@ -39,6 +39,9 @@ def fmt_minutes(m):
     return f"{m // 1440}d"
 
 
+CONNECT_TIMEOUT = 20  # seconds a terminal gets to connect before we retry later
+
+
 def auto_decision(f, now, cfg):
     """(blocker, minutes_left). blocker is a reason auto-hibernate won't run; minutes_left <= 0 means due."""
     if f["pinned"]:
@@ -159,7 +162,9 @@ class Engine:
             if term.up or self.retry_at.get(term, 0) > now:
                 continue
             try:
-                term.up = await term.start(self)
+                # A terminal that is still starting up can accept the socket and never answer; without a
+                # timeout that stalls every tick (and so every reconnect) for good.
+                term.up = await asyncio.wait_for(term.start(self), timeout=CONNECT_TIMEOUT)
             except Exception as e:  # pylint: disable=broad-except
                 log(f"{term.kind}: can't connect ({type(e).__name__}: {e})")
                 term.up = False

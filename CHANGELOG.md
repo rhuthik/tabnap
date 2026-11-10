@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A terminal that accepts the connection but never answers (iTerm2 mid-restart) no longer freezes the
+  daemon: connecting now times out after 20 s and retries.
 - iTerm2: reconnect after iTerm2 restarts or updates. The iterm2 library kept the first auth cookie,
   which iTerm2 rejects once used, so the daemon stayed disconnected until restarted.
 - iTerm2: a session resumed by hand (not through tabnap) keeps its title.
