@@ -195,5 +195,131 @@ class Service(unittest.TestCase):
         self.assertEqual(systemd_quote('/opt/my apps/py "x" 100%$HOME'), '"/opt/my apps/py \\"x\\" 100%%$$HOME"')
 
 
+
+class GroupTerm(FakeTerm):
+    def __init__(self):
+        super().__init__()
+        self.filed, self.collapsed = [], []
+
+    async def set_group(self, panes, name):
+        self.filed.append((name, sorted(p.key for p in panes)))
+
+    async def set_collapsed(self, group_id, collapsed):
+        self.collapsed.append((group_id, collapsed))
+
+    def groups_supported(self):
+        return True
+
+    async def close(self, pane):
+        self.closed = getattr(self, "closed", []) + [pane.key]
+
+
+class TabGroups(unittest.TestCase):
+    def setUp(self):
+        cfg = Config()
+        cfg.groups = {"oncall": r"CSTFP-\d+"}
+        self.e = Engine(cfg, [GroupTerm()])
+        self.term = self.e.terminals[0]
+        self.e.state.update(groups={}, suggested={}, keep={}, closed=[], tabs={})  # the module shares one state file
+
+    def pane(self, key, group="", gid="", focused=False):
+        return Pane(key=key, tty=None, name="", focused=focused, shell=False, order=(), term=self.term,
+                    group=group, group_id=gid)
+
+    def test_files_matching_ungrouped_tabs_once(self):
+        panes = {k: self.pane(k) for k in ("fake:1", "fake:2", "fake:3")}
+        panes["fake:3"].group = "mine"
+        rows = [{"id": "fake:1", "state": "idle", "group": "oncall", "title": "CSTFP-1 x", "session_id": "s1"},
+                {"id": "fake:2", "state": "idle", "group": "", "title": "other", "session_id": "s2"},
+                {"id": "fake:3", "state": "idle", "group": "mine", "title": "CSTFP-3", "session_id": "s3"}]
+        asyncio.run(self.e.sync_groups(panes, rows))
+        asyncio.run(self.e.sync_groups(panes, rows))  # pane.group not refreshed yet: still not filed twice
+        self.assertEqual(self.term.filed, [("oncall", ["fake:1"])])
+        self.assertEqual(self.e.state["groups"]["s3"]["group"], "mine")
+        self.assertEqual(self.e.group_for(self.pane("x"), "zz CSTFP-1821 Jira", "/tmp"), "oncall")
+        self.assertEqual(self.e.group_for(self.pane("x", group="mine"), "CSTFP-1", "/tmp"), "mine")
+
+    def test_collapse_on_changes_only(self):
+        panes = {k: self.pane(k, "oncall", "g1") for k in ("fake:1", "fake:2")}
+
+        def tick(*states):
+            rows = [{"id": k, "state": st, "group": "oncall"} for k, st in zip(panes, states)]
+            asyncio.run(self.e.sync_groups(panes, rows))
+        tick("idle", "hibernated")        # start-up with an awake tab: leave the group as you left it
+        self.assertEqual(self.term.collapsed, [])
+        tick("hibernated", "hibernated")  # last one fell asleep
+        tick("hibernated", "hibernated")  # no change: don't fight a manual expand
+        tick("idle", "hibernated")        # woke
+        self.assertEqual(self.term.collapsed, [("g1", True), ("g1", False)])
+
+    def test_restores_group_in_a_new_tab_and_respects_removal(self):
+        self.e.state["groups"] = {"s1": {"group": "firequest", "pane": "fake:old", "at": 0},
+                                  "s2": {"group": "router", "pane": "fake:2", "at": 0},
+                                  "s3": {"group": "", "pane": "fake:3", "at": 0}}
+        panes = {k: self.pane(k) for k in ("fake:1", "fake:2", "fake:3")}
+        rows = [{"id": f"fake:{i}", "state": "hibernated", "title": "CSTFP-9", "session_id": f"s{i}"} for i in (1, 2, 3)]
+        asyncio.run(self.e.sync_groups(panes, rows))
+        # s1: same conversation in a new tab (after a reboot) goes back; s2: you took it out of router in
+        # this very tab, so it stays out; s3: already out, and the oncall rule doesn't pull it back in.
+        self.assertEqual(self.term.filed, [("firequest", ["fake:1"])])
+        self.assertEqual(self.e.state["groups"]["s1"]["pane"], "fake:1")
+        self.assertEqual(self.e.state["groups"]["s2"]["group"], "")
+        self.assertEqual(self.e.group_for(panes["fake:3"], "CSTFP-9", "/", "s3"), "")
+
+    def test_just_filed_tab_is_not_mistaken_for_removed(self):
+        panes = {"fake:1": self.pane("fake:1")}
+        rows = [{"id": "fake:1", "state": "idle", "title": "CSTFP-1", "session_id": "s1"}]
+        asyncio.run(self.e.sync_groups(panes, rows))
+        asyncio.run(self.e.sync_groups(panes, rows))  # iTerm2 hasn't reported the group yet
+        self.assertEqual(self.e.state["groups"]["s1"]["group"], "oncall")
+
+    def test_asks_stale_keep_and_close(self):
+        self.e.cfg.stale_days = 7
+        self.e.panes = {"fake:1": self.pane("fake:1")}
+        self.e.state["tabs"]["fake:1"] = {"session_id": "s1", "title": "old", "command": "claude --resume s1",
+                                          "agent": "claude", "cwd": "/"}
+        rows = [{"id": "fake:1", "state": "hibernated", "title": "old", "session_id": "s1", "asleep_min": 8 * 1440},
+                {"id": "fake:2", "state": "hibernated", "title": "new", "session_id": "s2", "asleep_min": 60}]
+        self.e.asks = self.e.build_asks(rows)
+        self.assertEqual([a["id"] for a in self.e.asks], ["stale:s1"])
+        asyncio.run(self.e.answer("stale:s1", "keep"))
+        self.assertEqual(self.e.build_asks(rows), [])
+        self.e.state["keep"] = {}
+        self.e.asks = self.e.build_asks(rows)
+        asyncio.run(self.e.answer("stale:s1", "close"))
+        self.assertEqual(self.term.closed, ["fake:1"])
+        self.assertNotIn("fake:1", self.e.state["tabs"])
+        self.assertEqual(self.e.state["closed"][-1]["command"], "claude --resume s1")
+
+    def test_group_suggestion_only_files_on_yes(self):
+        self.e.panes = {"fake:1": self.pane("fake:1")}
+        self.e.rows = [{"id": "fake:1", "session_id": "s1"}]
+        self.e.state["suggested"] = {"s1": {"group": "firequest", "answer": None}}
+        rows = [{"id": "fake:1", "state": "idle", "title": "pipeline", "session_id": "s1", "group": ""}]
+        self.e.asks = self.e.build_asks(rows)
+        self.assertEqual(self.term.filed, [])
+        asyncio.run(self.e.answer("group:s1", "no"))
+        self.assertEqual((self.term.filed, self.e.build_asks(rows)), ([], []))
+        self.e.state["suggested"]["s1"]["answer"] = None
+        self.e.asks = self.e.build_asks(rows)
+        asyncio.run(self.e.answer("group:s1", "yes"))
+        self.assertEqual(self.term.filed, [("firequest", ["fake:1"])])
+        self.assertEqual(self.e.state["groups"]["s1"]["group"], "firequest")
+
+    def test_assign_groups_one_call_per_group_and_validates(self):
+        self.e.panes = {k: self.pane(k, group="old" if k == "fake:2" else "") for k in ("fake:1", "fake:2")}
+        asyncio.run(self.e.assign_groups({"firequest": ["fake:1", "fake:2"]}))
+        self.assertEqual(self.term.filed, [("firequest", ["fake:1", "fake:2"])])
+        self.assertEqual(self.e.grouped, {"fake:1", "fake:2"})
+        with self.assertRaises(ActionError):
+            asyncio.run(self.e.assign_groups({"x": ["fake:404"]}))
+        with self.assertRaises(ActionError):
+            asyncio.run(self.e.assign_groups(["fake:1"]))
+
+    def test_tab_without_agent_keeps_group_open(self):
+        panes = {"fake:1": self.pane("fake:1", "oncall", "g1"), "fake:9": self.pane("fake:9", "oncall", "g1")}
+        asyncio.run(self.e.sync_groups(panes, [{"id": "fake:1", "state": "hibernated", "group": "oncall"}]))
+        self.assertEqual(self.term.collapsed, [])
+
 if __name__ == "__main__":
     unittest.main()

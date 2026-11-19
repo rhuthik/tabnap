@@ -158,6 +158,9 @@ class Tmux(Terminal):
         await self.tmux("select-window", "-t", t)
         await self.tmux("select-pane", "-t", t)
 
+    async def close(self, pane):
+        await self.tmux("kill-pane", "-t", pane.ref["pane_id"])
+
     async def revert_all(self):
         for key in list(self.applied):
             pane_id = key.rsplit(":", 1)[1]

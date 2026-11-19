@@ -7,6 +7,7 @@ import fnmatch
 import glob
 import json
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 
@@ -43,6 +44,8 @@ SETTINGS = [
     Setting("panel_title", "panel_title", "str", "heading of the session list (iTerm2 Toolbelt, browser panel, tabnap top)"),
     Setting("port", "port", "int", "local API and panel port (127.0.0.1 only)", restart=True),
     Setting("terminals", "terminals", "list", "terminals to watch: iterm, tmux", restart=True),
+    Setting("stale_days", "stale_days", "float",
+            "the panel asks whether you still need a tab hibernated this many days (Keep / Close tab; 0 = never)"),
     Setting("auto.max_awake", "max_awake", "int",
             "when auto is on, keep at most this many sessions awake; the longest-idle ones sleep first (0 = no limit)"),
     Setting("auto.agents", "auto_agents", "list", "agents auto-hibernate may put to sleep: claude, codex"),
@@ -51,6 +54,15 @@ SETTINGS = [
     Setting("features.needs_pulse", "needs_pulse", "bool", "blink a tab when its agent finishes or waits for you"),
     Setting("features.title_spinner", "title_spinner", "bool", "iTerm2: animate the titles of working tabs"),
     Setting("features.tab_icon", "tab_icon", "bool", "iTerm2: a sleeping icon on hibernated tabs"),
+    Setting("features.collapse_groups", "collapse_groups", "bool",
+            "iTerm2: collapse a tab group while every tab in it is hibernated, expand it when one wakes"),
+    Setting("features.group_suggestions", "group_suggestions", "bool",
+            "ask in the panel before filing a new session into the tab group Claude picks for it "
+            "(sends its title, folder and last prompt to Claude)"),
+    Setting("group_suggestions.command", "suggest_command", "str",
+            "command that picks a group (prompt on stdin, group name on stdout)"),
+    Setting("groups", "groups", "dict",
+            "file sessions into tab groups: name = regex searched in the tab title and its folder (~ ok); first match wins"),
     Setting("claude.config_dirs", "claude_config_dirs", "list",
             "extra Claude Code config dirs (globs ok); ~/.claude and each process's CLAUDE_CONFIG_DIR are always checked"),
     Setting("claude.resume", "claude_resume", "str",
@@ -63,6 +75,8 @@ SETTINGS = [
             restart=True),
     Setting("iterm.window", "iterm_window", "str", "limit tabnap to one iTerm2 window id (for trying it out)", restart=True),
     Setting("iterm.icon", "iterm_icon", "path", "PNG for hibernated tabs (empty: a sleeping moon)", restart=True),
+    Setting("iterm.group_colors", "iterm_group_colors", "dict",
+            "tab group colors, e.g. oncall = \"#5c3a3a\"; other groups get a muted tint picked from their name"),
     Setting("snapshot.dir", "snapshot_dir", "path", "write every session + its resume command here for crash recovery (empty: off)",
             restart=True),
     Setting("snapshot.name", "snapshot_name", "str", "snapshot file name (strftime)"),
@@ -86,6 +100,12 @@ class Config:
     needs_pulse: bool = True
     title_spinner: bool = True
     tab_icon: bool = True
+    collapse_groups: bool = True
+    stale_days: float = 7
+    group_suggestions: bool = False
+    suggest_command: str = ('claude -p --model haiku --setting-sources "" --strict-mcp-config --tools "" '
+                            '--no-session-persistence')
+    groups: dict = field(default_factory=dict)
     claude_config_dirs: list = field(default_factory=list)
     claude_resume: str = "claude --resume {id}"
     claude_resume_by_dir: dict = field(default_factory=dict)
@@ -94,6 +114,7 @@ class Config:
     tmux_sockets: list = field(default_factory=list)
     iterm_window: str = ""
     iterm_icon: str = ""
+    iterm_group_colors: dict = field(default_factory=dict)
     snapshot_dir: str = ""
     snapshot_name: str = "tabnap-%Y%m%d-%H%M.json"
     snapshot_minutes: float = 15
@@ -149,6 +170,16 @@ def coerce(setting, value):
             value = json.loads(value)
         if not isinstance(value, dict):
             raise ValueError(f"{setting.key}: expected a table / JSON object")
+        if setting.key == "groups":
+            for name, pattern in value.items():
+                try:
+                    re.compile(str(pattern))
+                except re.error as e:
+                    raise ValueError(f"groups.{name}: bad regex ({e})") from None
+        if setting.key == "iterm.group_colors":
+            for name, color in value.items():
+                if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(color)):
+                    raise ValueError(f"iterm.group_colors.{name}: expected #rrggbb")
         return {str(k): str(v) for k, v in value.items()}
     if kind == "path":
         return os.path.expanduser(str(value)) if value else ""

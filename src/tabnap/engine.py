@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 
-from tabnap import procs
+from tabnap import groups, procs
 from tabnap.agents import BY_NAME, top_level
 from tabnap.config import STATE_DIR, STATE_FILE
 from tabnap.terminals.base import PLACEHOLDER_TITLES, Look, is_shell
@@ -19,6 +19,9 @@ from tabnap.terminals.base import PLACEHOLDER_TITLES, Look, is_shell
 TICK_SECONDS = 3
 MEM_SECONDS = 60
 PULSE_SECONDS = 0.8
+SUGGEST_SECONDS = 20
+GROUP_SETTLE_SECONDS = 15  # iTerm2 takes a moment to report a tab we just filed as grouped
+GROUP_FORGET_DAYS = 60     # forget the group of a conversation not seen for this long
 CAP_MIN_IDLE = 5  # minutes a session must be idle before max_awake may put it to sleep
 GLYPH_RE = re.compile(r"^[^\w\s(\[\"'`]{1,2}\s+")
 
@@ -89,6 +92,10 @@ def load_state(path=None):
     st.setdefault("tabs", {})      # pane key -> hibernated tab record
     st.setdefault("pinned", [])    # agent session ids that are never auto-hibernated
     st.setdefault("auto", False)
+    st.setdefault("groups", {})    # agent session id -> {group, pane, at}: its tab group, to restore it
+    st.setdefault("suggested", {}) # agent session id -> {group, answer}: Claude's group pick and your answer
+    st.setdefault("keep", {})      # agent session id -> don't ask "still need this tab?" before this time
+    st.setdefault("closed", [])    # hibernated tabs closed from the panel, with their resume commands
     return st
 
 
@@ -128,6 +135,10 @@ class Engine:
         self.mem_wanted = None    # asyncio.Event: a new agent pid has no memory sample yet
         self.kick = None          # asyncio.Event: run the next tick now (after an action)
         self.waiters = []         # futures resolved when the next full tick finishes
+        self.grouped = set()      # pane keys without a conversation yet that a rule already filed
+        self.collapse_want = {}   # (terminal, group id) -> collapsed state tabnap last wanted
+        self.asks = []            # questions for the panel, rebuilt every tick
+        self.lit_groups = {}      # (terminal, group id) -> name, for collapsed groups blinking for a tab inside
 
     # --- helpers ---
 
@@ -242,6 +253,11 @@ class Engine:
         with self.snap_lock:
             self.rows = rows
         procs.forget_except(table)
+        try:
+            await self.sync_groups(panes, rows)
+        except Exception as e:  # pylint: disable=broad-except
+            log(f"tab groups: {type(e).__name__}: {e}")
+        self.asks = self.build_asks(rows)
         if self.state["auto"]:
             await self.auto_hibernate()
 
@@ -295,7 +311,8 @@ class Engine:
             "blocker": blocker if status == "idle" else None, "pinned": facts["pinned"],
             "current": pane.focused, "can_hibernate": bool(info.session_id) and status == "idle",
             "bloated": mem > self.cfg.bloat_mb, "context": self.context(agent, info.transcript),
-            "needs": self.needs.get(key), "order": pane.order,
+            "needs": self.needs.get(key), "order": pane.order, "cwd": info.cwd, "session_id": info.session_id,
+            "group": self.group_for(pane, title, info.cwd, info.session_id),
         }
 
     async def hibernated_row(self, pane, hib, now):
@@ -313,7 +330,204 @@ class Engine:
                 "state": "waking" if waking else "hibernated", "detail": None, "mem_mb": 0,
                 "freed_mb": hib["freed_mb"], "asleep_min": round(asleep),
                 "pinned": hib["session_id"] in self.state["pinned"], "current": False, "order": pane.order,
+                "cwd": hib["cwd"], "session_id": hib["session_id"],
+                "group": self.group_for(pane, hib["title"], hib["cwd"], hib["session_id"]),
                 "context": self.context(agent, hib.get("transcript")) if agent else {}}
+
+    def group_for(self, pane, title, cwd, sid=None):
+        """The tab's own group; else the group tabnap remembers for this conversation; else the first rule."""
+        if pane.group:
+            return pane.group
+        if sid and pane.term.groups_supported() and sid in self.state["groups"]:
+            return self.state["groups"][sid].get("group", "")
+        return groups.match(groups.compile_rules(self.cfg.groups), title, cwd)
+
+    async def sync_groups(self, panes, rows):
+        """Keep tab groups in step with what tabnap knows:
+        - remember each conversation's group (state["groups"]: session id -> {group, pane, at});
+        - put a conversation back in its group when it shows up in a new tab (after a reboot or restore);
+        - file conversations seen for the first time into the group a rule names;
+        - collapse groups whose tabs are all asleep."""
+        now = time.time()
+        mem = self.state["groups"]
+        rules = groups.compile_rules(self.cfg.groups)
+        todo, changed = {}, False
+        for r in rows:
+            pane, sid = panes.get(r["id"]), r.get("session_id")
+            if not pane or not pane.term.groups_supported():
+                continue
+            if not sid:  # no conversation yet (or resumed through a picker): rules only, remembered until restart
+                if r.get("group") and not pane.group and pane.key not in self.grouped:
+                    todo.setdefault((pane.term, r["group"]), []).append(pane)
+                    self.grouped.add(pane.key)
+                continue
+            m = mem.get(sid)
+            if pane.group:
+                if not m or m.get("group") != pane.group or m.get("pane") != pane.key:
+                    mem[sid] = {"group": pane.group, "pane": pane.key, "at": now}
+                    changed = True
+                continue
+            if m is None:
+                name = groups.match(rules, r["title"], r.get("cwd"))
+                if name:
+                    todo.setdefault((pane.term, name), []).append(pane)
+                    mem[sid] = {"group": name, "pane": pane.key, "at": now}
+                    changed = True
+            elif not m.get("group"):
+                continue  # you took it out of its group; leave it out
+            elif m.get("pane") != pane.key:  # same conversation, new tab: put it back
+                todo.setdefault((pane.term, m["group"]), []).append(pane)
+                m.update(pane=pane.key, at=now)
+                changed = True
+            elif now - m.get("at", 0) > GROUP_SETTLE_SECONDS:  # was in the group in this tab, isn't any more
+                m.update(group="", at=now)
+                changed = True
+        seen = {r.get("session_id") for r in rows}
+        for sid in [s for s, m in mem.items() if s not in seen and now - m.get("at", 0) > GROUP_FORGET_DAYS * 86400]:
+            del mem[sid]
+            changed = True
+        if changed:
+            save_state(self.state)
+        for (term, name), members in todo.items():
+            await term.set_group(members, name)
+            log(f"filed {len(members)} tab(s) into group {name}")
+        if not self.cfg.collapse_groups:
+            return
+        by_id = {r["id"]: r for r in rows}
+        members = {}
+        for pane in panes.values():
+            if pane.group_id:
+                row = by_id.get(pane.key) or {}
+                members.setdefault((pane.term, pane.group_id), []).append(
+                    {"state": row.get("state", "none"), "current": pane.focused})
+        for gkey, ms in members.items():
+            want = groups.want_collapsed(ms)
+            before = self.collapse_want.get(gkey)
+            self.collapse_want[gkey] = want
+            # Act on changes only, so a group you open or close by hand stays that way; and never
+            # expand at start-up, when we don't know what you left collapsed on purpose.
+            if want != before and (want or before is not None):
+                await gkey[0].set_collapsed(gkey[1], want)
+
+    async def assign_groups(self, mapping):
+        """File tabs into groups by hand: {group name: [pane keys]}. Moves a tab out of any group it's in."""
+        if not isinstance(mapping, dict) or not all(isinstance(v, list) for v in mapping.values()):
+            raise ActionError("expected {group: [tab ids]}")
+        sids = {r["id"]: r.get("session_id") for r in self.rows}
+        for name, keys in mapping.items():
+            missing = [k for k in keys if k not in self.panes]
+            if missing:
+                raise ActionError(f"tab not found: {missing[0]}")
+            by_term = {}
+            for k in keys:
+                by_term.setdefault(self.panes[k].term, []).append(self.panes[k])
+            for term, panes in by_term.items():  # one call per group, so a new group is created once
+                await term.set_group(panes, str(name))
+            self.grouped.update(keys)
+            for k in keys:
+                if sids.get(k):
+                    self.state["groups"][sids[k]] = {"group": str(name), "pane": k, "at": time.time()}
+            log(f"filed {len(keys)} tab(s) into group {name} by hand")
+        save_state(self.state)
+        self.nudge()
+
+    # --- questions in the panel (nothing happens until you answer) ---
+
+    def build_asks(self, rows):
+        """Questions for the panel: "put this tab in group X?" and "still need this tab?"."""
+        now, asks = time.time(), []
+        for r in rows:
+            sid = r.get("session_id")
+            s = self.state["suggested"].get(sid) if sid else None
+            if s and s.get("group") and s.get("answer") is None and not r.get("group"):
+                asks.append({"id": f"group:{sid}", "kind": "group", "tab": r["id"], "title": r["title"],
+                             "group": s["group"], "text": f"Put this session in {s['group']}?",
+                             "choices": [["yes", f"Move to {s['group']}"], ["no", "No"]]})
+        if self.cfg.stale_days:
+            stale = [r for r in rows if r["state"] == "hibernated" and r.get("session_id")
+                     and r.get("asleep_min", 0) >= self.cfg.stale_days * 1440
+                     and self.state["keep"].get(r["session_id"], 0) < now]
+            for r in sorted(stale, key=lambda r: -r["asleep_min"]):
+                asks.append({"id": f"stale:{r['session_id']}", "kind": "stale", "tab": r["id"], "title": r["title"],
+                             "text": f"Asleep for {fmt_minutes(r['asleep_min'])}. Still need this tab?",
+                             "choices": [["keep", "Keep"], ["close", "Close tab"]]})
+        return asks
+
+    async def answer(self, ask_id, choice):
+        ask = next((a for a in self.asks if a["id"] == ask_id), None)
+        if not ask or choice not in [c[0] for c in ask["choices"]]:
+            raise ActionError("that question is gone; refresh")
+        sid = ask_id.split(":", 1)[1]
+        if ask["kind"] == "group":
+            self.state["suggested"][sid]["answer"] = choice
+            if choice == "yes":
+                await self.assign_groups({ask["group"]: [ask["tab"]]})
+        elif choice == "keep":
+            self.state["keep"][sid] = time.time() + self.cfg.stale_days * 86400  # ask again after another stretch
+        else:
+            await self.close_tab(ask["tab"])
+        save_state(self.state)
+        self.asks = [a for a in self.asks if a["id"] != ask_id]
+        self.nudge()
+
+    async def close_tab(self, key):
+        """Close a hibernated tab, keeping its resume command in state["closed"] (newest last, 100 kept)."""
+        hib, pane = self.state["tabs"].get(key), self.panes.get(key)
+        if not hib or not pane:
+            raise ActionError("only a hibernated tab can be closed from here")
+        await pane.term.close(pane)
+        self.state["closed"] = (self.state["closed"] + [{**hib, "closed_at": time.time()}])[-100:]
+        del self.state["tabs"][key]
+        save_state(self.state)
+        log(f"closed tab of {hib['session_id']} ({hib['title']}); resume: {hib['command']}")
+
+    # --- "which group does this belong in?" (off unless features.group_suggestions) ---
+
+    def suggestion_candidates(self):
+        """Sessions to ask Claude about: in a terminal with groups, not in one, never decided before."""
+        names = {r.get("group") for r in self.rows if r.get("group")}
+        if not names:
+            return []
+        out = []
+        for r in self.rows:
+            sid, pane = r.get("session_id"), self.panes.get(r["id"])
+            if (sid and pane and pane.term.groups_supported() and not r.get("group") and sid not in self.state["groups"]
+                    and sid not in self.state["suggested"] and r["title"] not in PLACEHOLDER_TITLES):
+                out.append(r)
+        return out
+
+    async def run_suggestions(self):
+        while True:
+            await asyncio.sleep(SUGGEST_SECONDS)
+            if not self.cfg.group_suggestions:
+                continue
+            for r in self.suggestion_candidates()[:1]:  # one at a time: each is a model call
+                sid = r["session_id"]
+                try:
+                    name = await asyncio.get_running_loop().run_in_executor(None, self.classify, r)
+                except Exception as e:  # pylint: disable=broad-except
+                    log(f"group suggestion for '{r['title']}' failed: {type(e).__name__}: {e}")
+                    name = ""
+                self.state["suggested"][sid] = {"group": name, "answer": None, "at": time.time()}
+                save_state(self.state)
+                if name:
+                    log(f"suggested group {name} for '{r['title']}'")
+                    self.nudge()
+
+    def classify(self, row):
+        members = {}
+        for r in self.rows:
+            if r.get("group"):
+                members.setdefault(r["group"], []).append(r["title"])
+        key = row["id"]
+        transcript, agent, config_dir = None, BY_NAME.get(row["agent"]), None
+        if key in self.live:
+            info = self.live[key][1]
+            transcript, config_dir = info.transcript, info.extra.get("config_dir")
+        elif key in self.state["tabs"]:
+            transcript, config_dir = self.state["tabs"][key].get("transcript"), self.state["tabs"][key].get("config_dir")
+        prompt = ((agent.context(transcript) if agent and transcript else {}) or {}).get("prompt", "")
+        return groups.classify(self.cfg.suggest_command, members, row["title"], row.get("cwd"), prompt, config_dir)
 
     async def on_woke(self, pane, hib):
         log(f"woke {hib['session_id']} ({hib['title']})")
@@ -536,11 +750,11 @@ class Engine:
         log(f"waking {hib['agent']} {hib['session_id']} ({hib['title']})")
         self.nudge()
 
-    async def hibernate_idle(self):
-        """Put every idle session to sleep that auto-hibernate could take (same rules, no idle timer).
-        Returns (slept titles, {title: why skipped})."""
+    async def hibernate_idle(self, group=None):
+        """Put every idle session to sleep that auto-hibernate could take (same rules, no idle timer),
+        only those in `group` if given. Returns (slept titles, {title: why skipped})."""
         slept, skipped = [], {}
-        for row in [r for r in self.rows if r.get("state") == "idle"]:
+        for row in [r for r in self.rows if r.get("state") == "idle" and (group is None or r.get("group") == group)]:
             if row.get("blocker"):
                 skipped[row["title"]] = row["blocker"]
                 continue
@@ -716,20 +930,35 @@ class Engine:
         lit = False
         while True:
             lit = not lit
+            hidden = {}  # collapsed groups hiding a tab that needs you: blink the group instead
             for key in list(self.needs):
                 pane = self.panes.get(key)
                 if not pane or key in self.acting:
                     continue
+                if pane.group_id and pane.group_collapsed:
+                    hidden[(pane.term, pane.group_id)] = pane.group
                 try:
                     await self.set_pulse(pane, lit)
                 except Exception:  # pylint: disable=broad-except
                     pass
+            for gkey, name in list(hidden.items()) + [(g, n) for g, n in self.lit_groups.items() if g not in hidden]:
+                try:
+                    await gkey[0].pulse_group(gkey[1], name, lit and gkey in hidden)
+                except Exception:  # pylint: disable=broad-except
+                    pass
+            self.lit_groups = hidden
             await asyncio.sleep(PULSE_SECONDS)
 
     def snapshot(self):
         with self.snap_lock:
             rank = {"working": 0, "waiting": 1, "idle": 2, "waking": 3, "hibernated": 4}
-            rows = sorted(self.rows, key=lambda r: (rank.get(r["state"], 2), r["order"]))  # awake on top
+            names = list(self.cfg.groups)
+            for r in sorted(self.rows, key=lambda r: r["order"]):
+                if r.get("group") and r["group"] not in names:
+                    names.append(r["group"])
+            pos = {n: i for i, n in enumerate(names)}
+            # Grouped sessions first, group by group; ungrouped ones last. Awake on top within each.
+            rows = sorted(self.rows, key=lambda r: (pos.get(r.get("group"), len(names)), rank.get(r["state"], 2), r["order"]))
         awake = [r for r in rows if r["state"] not in ("hibernated", "waking")]
         return {
             "auto": self.state["auto"], "idle_minutes": self.cfg.idle_minutes, "sessions": rows,
@@ -737,6 +966,7 @@ class Engine:
             "in_use_mb": sum(r["mem_mb"] for r in awake),
             "freed_mb": sum(r.get("freed_mb") or 0 for r in rows if r["state"] == "hibernated"),
             "terminals": [t.kind for t in self.terminals if t.up], "title": self.cfg.panel_title,
+            "groups": [n for n in names if any(r.get("group") == n for r in rows)], "asks": self.asks,
         }
 
 

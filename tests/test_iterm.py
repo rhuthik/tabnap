@@ -50,5 +50,35 @@ class ITermTest(unittest.TestCase):
         old_ws.close.assert_awaited_once()
 
 
+    def test_set_group_creates_once_per_window_then_joins(self):
+        cfg = Config()
+        cfg.iterm_group_colors = {"oncall": "#5c3a3a"}
+        t = ITerm(cfg)
+        s1, s2, s3 = FakeSession("a"), FakeSession("b"), FakeSession("c")
+        tabs = [SimpleNamespace(tab_id=str(i), joined=[]) for i in range(3)]
+        for tab in tabs:
+            async def add(group, tab=tab):
+                tab.joined.append(group)
+            tab.async_add_to_tab_group = add
+        window = SimpleNamespace(window_id="w1", tab_groups=[], created=[])
+
+        async def create(name, tabs_, color=None):
+            window.created.append((name, [x.tab_id for x in tabs_], color.hex))
+            window.tab_groups.append(SimpleNamespace(name=name, group_id="g1"))
+            return window.tab_groups[-1]
+        window.async_create_tab_group = create
+        where = {"a": tabs[0], "b": tabs[0], "c": tabs[1]}  # a and b are split panes of one tab
+        t.app = SimpleNamespace(get_session_by_id=lambda sid: {"a": s1, "b": s2, "c": s3}[sid],
+                                get_window_and_tab_for_session=lambda s: (window, where[s.session_id]))
+        t.conn = object()
+        pane = lambda sid: SimpleNamespace(ref=sid)
+        with mock.patch.object(iterm_mod, "supports_tab_groups", return_value=True):
+            asyncio.run(t.set_group([pane("a"), pane("b")], "oncall"))
+            asyncio.run(t.set_group([pane("c")], "oncall"))
+        self.assertEqual(window.created, [("oncall", ["0"], "#5c3a3a")])
+        self.assertEqual(t.colored, {"g1"})
+        self.assertEqual([g.group_id for g in tabs[1].joined], ["g1"])
+
+
 if __name__ == "__main__":
     unittest.main()

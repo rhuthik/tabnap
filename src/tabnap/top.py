@@ -57,7 +57,16 @@ def draw(scr, st, sel, frame, msg):
     put(0, max(len(head) + 2, w - len(auto) - 1), auto, curses.color_pair(3) if st["auto"] else curses.A_DIM)
     put(1, 0, "─" * (w - 1), curses.A_DIM)
     y = 2
+    grouped, last = bool(st.get("groups")), None
     for i, r in enumerate(st["sessions"]):
+        if grouped and (r.get("group") or "") != last:
+            last = r.get("group") or ""
+            members = [x for x in st["sessions"] if (x.get("group") or "") == last]
+            asleep = sum(x["state"] == "hibernated" for x in members)
+            if y >= h - 3:
+                break
+            put(y, 1, f"{last or 'other'}  {len(members) - asleep} awake · {asleep} asleep", curses.A_BOLD | curses.A_DIM)
+            y += 1
         if y >= h - 2:
             break
         color = {"working": 1, "waiting": 4, "hibernated": 2, "waking": 2}.get(r["state"], 0)

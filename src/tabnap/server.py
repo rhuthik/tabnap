@@ -79,9 +79,21 @@ def make_handler(engine, loop, token):
                 elif url.path == "/api/auto":
                     engine.set_auto(q.get("on") == "1")
                 elif url.path == "/api/hibernate_idle":
-                    slept, skipped = self.run(engine.hibernate_idle(), timeout=900)
+                    slept, skipped = self.run(engine.hibernate_idle(q.get("group") or None), timeout=900)
                     self.run(engine.settle())
                     return self.reply(200, {"ok": True, "slept": slept, "skipped": skipped})
+                elif url.path == "/api/answer":
+                    self.run(engine.answer(q.get("ask", ""), q.get("choice", "")))
+                    self.run(engine.settle())
+                elif url.path == "/api/groups":
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if length > 1 << 20:
+                        return self.reply(413, {"error": "too large"})
+                    try:
+                        mapping = json.loads(self.rfile.read(length) or b"{}")
+                    except ValueError:
+                        return self.reply(400, {"error": "body must be JSON"})
+                    self.run(engine.assign_groups(mapping))
                 elif url.path == "/api/adopt":
                     length = int(self.headers.get("Content-Length") or 0)
                     if length > 1 << 20:
@@ -130,7 +142,7 @@ def serve(engine, loop, port, token):
     return port
 
 
-def api(path, method="POST", **params):
+def api(path, method="POST", body=None, **params):
     """Call the running daemon. Raises SystemExit with a readable message on failure."""
     try:
         with open(DAEMON_FILE) as fh:
@@ -138,7 +150,8 @@ def api(path, method="POST", **params):
     except (OSError, ValueError):
         raise SystemExit("tabnap daemon isn't running. Start it: tabnap install (or tabnap daemon)")
     url = f"http://127.0.0.1:{info['port']}{path}?" + urllib.parse.urlencode({"t": info["token"], **params})
-    req = urllib.request.Request(url, data=b"" if method == "POST" else None, method=method)
+    data = json.dumps(body).encode() if body is not None else (b"" if method == "POST" else None)
+    req = urllib.request.Request(url, data=data, method=method)
     try:
         with urllib.request.urlopen(req, timeout=900 if path == "/api/hibernate_idle" else 60) as r:
             return json.load(r)

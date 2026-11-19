@@ -13,6 +13,11 @@ import time
 import zlib
 
 import iterm2
+try:
+    from iterm2.capabilities import supports_tab_groups
+except ImportError:  # iterm2 package from before tab groups
+    def supports_tab_groups(_connection):
+        return False
 
 from tabnap.config import ICON_PATH
 from tabnap.engine import log, strip_glyph
@@ -47,6 +52,10 @@ def unfaint(line):
     return "".join(out)
 
 
+# Dark, desaturated tints: iTerm2's own picks are bright blocks in the tab bar.
+GROUP_TINTS = ["#5c3a3a", "#5c4a32", "#33475c", "#3d3a5c", "#2f5250", "#4a4f36", "#4a4a4f", "#3a4f3c", "#523a4f"]
+
+
 class ITerm(Terminal):
     kind = "iterm"
     has_panel = True
@@ -62,6 +71,9 @@ class ITerm(Terminal):
         self.base_props = {} # (profile guid, key) -> value in the tab's own profile, to restore on wake
         self.frame = 0
         self.icon = ICON_PATH
+        # shortcut: iTerm2 reports group colors in Display P3, so a color we set never reads back equal;
+        # we color each group once per run instead of comparing — revisit if iTerm2 returns sRGB.
+        self.colored = set() # tab group ids whose color tabnap has set
 
     # --- connection ---
 
@@ -106,6 +118,8 @@ class ITerm(Terminal):
         if "panel_title" in changed_keys:  # same tool id, new name in View > Toolbelt
             await iterm2.tool.async_register_web_view_tool(
                 self.conn, cfg.panel_title, TOOL_ID, False, f"http://127.0.0.1:{self.engine.port}/panel?t={self.engine.token}")
+        if "iterm.group_colors" in changed_keys:
+            self.colored.clear()  # repaint every group on the next scan
         if "features.title_spinner" in changed_keys and not cfg.title_spinner:
             for sid, look in list(self.looks.items()):  # put plain titles back on tabs mid-spin
                 s = self.app.get_session_by_id(sid)
@@ -144,8 +158,14 @@ class ITerm(Terminal):
                         if "SESSION_NOT_FOUND" not in str(e):
                             raise
                         continue  # closed since the App snapshot; not a lost connection
+                    group = getattr(tab, "tab_group", None)  # None on iTerm2 / iterm2 versions without groups
+                    if group and group.group_id not in self.colored and self.groups_supported():
+                        self.colored.add(group.group_id)
+                        await group.async_set_color(iterm2.Color.from_hex(self.group_color(group.name)))
                     out.append(Pane(key=f"{self.prefix}:{sid}", tty=self.ttys[sid], name=name,
-                                    focused=sid == current, shell=False, order=(wi, ti, si), term=self, ref=sid))
+                                    focused=sid == current, shell=False, order=(wi, ti, si), term=self, ref=sid,
+                                    group=group.name if group else "", group_id=group.group_id if group else "",
+                                    group_collapsed=bool(group and group.collapsed)))
         return out
 
     async def screen(self, pane, drop_faint=False):
@@ -299,7 +319,54 @@ class ITerm(Terminal):
         self.applied.setdefault(s.session_id, {})["pulse"] = on
 
     async def focus(self, pane):
+        if pane.group_id:
+            await self.set_collapsed(pane.group_id, False)  # a collapsed group hides the tab
         await self.session(pane).async_activate(select_tab=True, order_window_front=True)
+
+    def group_color(self, name):
+        return self.cfg.iterm_group_colors.get(name) or GROUP_TINTS[zlib.crc32(name.encode()) % len(GROUP_TINTS)]
+
+    async def close(self, pane):
+        s = self.session(pane)
+        if s:
+            await s.async_close(force=True)
+
+    def find_group(self, group_id):
+        return next((g for w in self.app.terminal_windows for g in w.tab_groups if g.group_id == group_id), None)
+
+    async def pulse_group(self, group_id, name, on):
+        group = self.find_group(group_id) if self.groups_supported() else None
+        if group:
+            await group.async_set_color(iterm2.Color(*PULSE_RGB) if on else iterm2.Color.from_hex(self.group_color(name)))
+
+    def groups_supported(self):
+        return bool(self.conn) and supports_tab_groups(self.conn)
+
+    async def set_group(self, panes, name):
+        if not self.groups_supported():
+            return
+        by_window = {}
+        for pane in panes:
+            s = self.session(pane)
+            window, tab = self.app.get_window_and_tab_for_session(s) if s else (None, None)
+            if tab and window:
+                by_window.setdefault(window.window_id, (window, {}))[1][tab.tab_id] = tab
+        for window, tabs in by_window.values():
+            existing = next((g for g in window.tab_groups if g.name == name), None)
+            if existing:
+                for tab in tabs.values():
+                    await tab.async_add_to_tab_group(existing)
+            else:
+                group = await window.async_create_tab_group(
+                    name, list(tabs.values()), iterm2.Color.from_hex(self.group_color(name)))
+                self.colored.add(group.group_id)
+
+    async def set_collapsed(self, group_id, collapsed):
+        if not self.groups_supported():
+            return
+        group = self.find_group(group_id)
+        if group and group.collapsed != collapsed:
+            await group.async_set_collapsed(collapsed)
 
     async def revert_all(self):
         for s in self.all_sessions():

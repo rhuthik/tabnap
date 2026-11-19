@@ -59,6 +59,9 @@ Drop `[iterm]` on Linux or if you only use tmux.
 | `tabnap hibernate <tab>` / `wake` / `refresh` | `<tab>` is part of the title, an agent name, or a tab id |
 | `tabnap hibernate --idle` | put every idle session to sleep now (also **Sleep all idle** in the panel, `H` in `top`) |
 | `tabnap pin <tab>` | never auto-hibernate this one (`unpin` to undo) |
+| `tabnap groups` | your tab groups, plus suggested rules from the folders your tabs are in (`--apply` saves them) |
+| `tabnap hibernate --group <name>` | put a group's idle sessions to sleep |
+| `tabnap group <name> <tab>...` | put tabs in a group by hand (moves them out of any other group) |
 | `tabnap auto on\|off` | auto-hibernate switch |
 | `tabnap panel` | the session panel in your browser |
 | `tabnap start` / `stop` / `restart` | run the daemon now and at login / stop it / restart after a config edit |
@@ -97,9 +100,24 @@ tabnap auto on                                       # the auto-hibernate switch
 | `features.context` | off | your last prompt + the agent's reply in the session list |
 | `features.needs_pulse` | on | blink tabs that finish or wait for you |
 | `features.title_spinner` / `tab_icon` | on | iTerm2 tab decorations |
+| `groups` | – | file sessions into tab groups: `oncall = "CSTFP-\\d+\|^~/work/oncall(/\|$)"`, a regex searched in the tab title and folder; first match wins |
+| `iterm.group_colors` | – | tab group colors, e.g. `oncall = "#5c3a3a"`. Groups not listed get a dark, muted tint picked from their name, not iTerm2's bright default |
+| `features.group_suggestions` | off | when a new session isn't in a group, ask Claude (Haiku, via `claude -p`) which group fits, and ask **you** in the panel before moving it. Sends the session's title, folder and last prompt |
+| `stale_days` | 7 | the panel asks whether you still need a tab that has been hibernated this many days: **Keep** (ask again after another stretch) or **Close tab** (its resume command is kept in the state file). 0 = never |
+| `features.collapse_groups` | on | iTerm2: collapse a group once every tab in it is hibernated, expand it when one wakes |
 | `panel_title` | Agent sessions | heading of the session list |
 | `claude.resume_by_dir` | – | how each Claude config dir resumes, e.g. `"~/.claude-profiles/*" = "claude-{profile} --resume {id}"` |
 | `snapshot.dir` | – | crash insurance: every 15 min, write every session and its resume command here (private files). After a crash, `tabnap snapshot` prints them ready to paste |
+
+**Tab groups** (iTerm2 3.7+, which has named, collapsible tab groups): a `[groups]` rule files a matching session into that group the first time tabnap sees it. A tab you've already put in a group by hand stays in that group. The panel and `tabnap top` list sessions group by group, and on tmux this is the only grouping.
+
+tabnap remembers each conversation's group, so after a reboot or a restore its tab goes back into that group. If you take a tab out of its group, it stays out. When a tab inside a collapsed group needs you, the group itself blinks.
+
+```toml
+[groups]
+oncall = "CSTFP-\\d+|^~/work/oncall(/|$)"
+infra = "^~/work/infra(/|$)"
+```
 
 Per session: **pin** a session (📌 in the panel, `tabnap pin <tab>`) to keep it awake.
 

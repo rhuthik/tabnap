@@ -17,6 +17,9 @@ class Pane:
     focused: bool
     shell: bool              # a shell is in the foreground (a prompt is showing)
     order: tuple
+    group: str = ""          # name of the tab group the pane is in ("" if none or unsupported)
+    group_id: str = ""       # the terminal's id for that group (names can repeat across windows)
+    group_collapsed: bool = False
     term: "Terminal" = field(repr=False, default=None)
     ref: object = field(repr=False, default=None)
 
@@ -73,6 +76,23 @@ class Terminal:
 
     async def focus(self, pane):
         pass
+
+    def groups_supported(self):
+        """Can this terminal put tabs in named groups?"""
+        return False
+
+    async def close(self, pane):
+        """Close the pane (its tab, if it is the only pane)."""
+        raise NotImplementedError
+
+    async def pulse_group(self, group_id, name, on):
+        """Light up (or not) a collapsed group that hides a tab needing you."""
+
+    async def set_group(self, panes, name):
+        """Put the tabs of `panes` into the tab group `name` (created if needed). No-op without groups."""
+
+    async def set_collapsed(self, group_id, collapsed):
+        """Collapse or expand a tab group."""
 
     async def agent_status(self, pane):
         """The terminal's own idea of the agent's state, if it has one ({status, detail})."""

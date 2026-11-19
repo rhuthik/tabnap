@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Tab groups. `[groups]` rules (`name = regex` matched against the tab title or folder) file
+  sessions into iTerm2 tab groups. A group collapses once all its tabs are hibernated and expands
+  when one wakes (`features.collapse_groups`). The panel and `tabnap top` show group headings, and
+  the panel has a "Sleep idle" button per group. `tabnap groups` suggests rules from the folders
+  your tabs are in, and `tabnap hibernate --group <name>` puts one group's idle sessions to sleep.
+  `tabnap group <name> <tab>...` (and `POST /api/groups`) files tabs into a group by hand.
+  Groups get dark, muted tints; set your own with `iterm.group_colors`.
+- Tab groups survive a reboot or restore: tabnap remembers each conversation's group and puts its
+  new tab back in it. A tab you take out of a group stays out.
+- A collapsed group blinks when a tab inside it needs you.
+- Panel questions, nothing happens until you answer: "Put this session in <group>?" (opt-in
+  `features.group_suggestions`, which asks Claude Haiku to pick the group) and "Still need this tab?"
+  for tabs hibernated `stale_days` (7) days, with Keep / Close tab.
 - iTerm2: a tab closing mid-scan (`SESSION_NOT_FOUND`) was treated as a lost connection, and the
   reconnect left the old socket open, so it kept the status-bar RPC and every retry failed with
   `DUPLICATE_SERVER_ORIGINATED_RPC` until the daemon was restarted. The scan now skips the closed

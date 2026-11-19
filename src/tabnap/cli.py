@@ -5,6 +5,9 @@
   tabnap top                interactive list (works in any terminal; bind it to a tmux popup)
   tabnap hibernate <tab>    <tab>: part of the title, an agent name, or the start of the tab id
   tabnap hibernate --idle   put every idle session to sleep (pinned, focused and busy ones stay awake)
+  tabnap hibernate --group <name>   the same, for one tab group
+  tabnap group <name> <tab>...   put these tabs in group <name> (moves them out of any other group)
+  tabnap groups             tab groups and suggested rules from your open tabs (--apply saves the suggestions)
   tabnap wake <tab>
   tabnap refresh <tab>      hibernate + wake: same conversation, fresh process (drops leaked memory)
   tabnap pin <tab>          keep awake: never auto-hibernate (unpin to undo)
@@ -62,7 +65,8 @@ async def daemon_main():
     engine.token = token
     log(f"tabnap {__version__} up on 127.0.0.1:{engine.port}; {len(engine.state['tabs'])} hibernated tab(s) on "
         f"record; auto={'on' if engine.state['auto'] else 'off'}; terminals: {', '.join(t.kind for t in engine.terminals)}")
-    await asyncio.gather(engine.run_mem(), engine.run_ticks(), engine.run_pulse(), engine.run_snapshots())
+    await asyncio.gather(engine.run_mem(), engine.run_ticks(), engine.run_pulse(), engine.run_snapshots(),
+                         engine.run_suggestions())
 
 
 def single_instance():
@@ -191,6 +195,37 @@ def cmd_config(args):
     print(f"{'auto':<24} = {'on' if st and st.get('auto') else 'off':<28}  # the auto-hibernate switch: tabnap auto on|off")
 
 
+def cmd_groups(args):
+    from tabnap import groups
+    st = api("/api/state", method="GET")
+    rows = st["sessions"]
+    for name in st.get("groups") or []:
+        members = [r for r in rows if r.get("group") == name]
+        asleep = sum(r["state"] == "hibernated" for r in members)
+        print(f"{name}  ({len(members)} sessions, {asleep} asleep)")
+        for r in members:
+            print(f"    {r['title'][:60]:<60}  {groups.tilde(r.get('cwd'))}")
+    loose = [r for r in rows if not r.get("group")]
+    if st.get("groups"):
+        print(f"ungrouped: {len(loose)} sessions")
+    cfg = config.load()
+    rules = {k: v for k, v in groups.suggest(rows).items() if k not in cfg.groups}
+    if not rules:
+        return print("No new group suggestions." if loose else "")
+    print("\nSuggested rules (first match wins; edit with `tabnap config edit`):")
+    compiled = groups.compile_rules({**cfg.groups, **rules})
+    for name, pattern in rules.items():
+        n = sum(groups.match(compiled, r["title"], r.get("cwd")) == name for r in loose)
+        print(f"  {name} = {config.toml_value(pattern)}   # {n} sessions")
+    if "--apply" not in args:
+        return print("Run `tabnap groups --apply` to add them.")
+    merged = json.dumps({**cfg.groups, **rules})
+    result = try_api("/api/config", key="groups", value=merged)
+    if result is None:
+        config.set_value("groups", merged)
+    print(f"Added {len(rules)} rule(s); matching tabs are filed into groups on the next tick.")
+
+
 def try_api(path, method="POST", **params):
     """api() that returns None when the daemon isn't running, and exits on a real error."""
     if not os.path.exists(DAEMON_FILE):
@@ -279,6 +314,19 @@ def main(argv=None):
         for t, why in result["skipped"].items():
             print(f"left awake: {t} ({why})")
         return print(f"{len(result['slept'])} put to sleep, {len(result['skipped'])} left awake.")
+    if cmd == "hibernate" and len(args) == 2 and args[0] == "--group":
+        result = api("/api/hibernate_idle", group=args[1])
+        for t in result["slept"]:
+            print(f"hibernated: {t}")
+        for t, why in result["skipped"].items():
+            print(f"left awake: {t} ({why})")
+        return print(f"{args[1]}: {len(result['slept'])} put to sleep, {len(result['skipped'])} left awake.")
+    if cmd == "groups":
+        return cmd_groups(args)
+    if cmd == "group" and len(args) >= 2:
+        rows = [resolve(a) for a in args[1:]]
+        api("/api/groups", body={args[0]: [r["id"] for r in rows]})
+        return print(f"{args[0]}: " + ", ".join(r["title"] for r in rows))
     if cmd in ("hibernate", "wake", "refresh", "pin", "unpin") and args:
         row = resolve(" ".join(args))
         api(f"/api/{cmd}", id=row["id"])

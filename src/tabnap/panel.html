@@ -66,6 +66,22 @@
   #toast.ok { background:var(--green); }
   #toast { position:fixed; left:8px; right:8px; bottom:8px; background:var(--err); color:#fff; padding:7px 9px; border-radius:6px; font-size:11px; display:none; }
   .empty { padding:14px 10px; color:var(--muted); }
+  .gh { display:flex; align-items:center; gap:6px; padding:8px 10px 5px; border-bottom:1px solid var(--line); cursor:pointer;
+        font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); user-select:none; }
+  .gh .gc { font-weight:400; text-transform:none; letter-spacing:0; }
+  .gh .pill { margin-left:auto; font-size:10px; text-transform:none; letter-spacing:0; font-weight:400; }
+  .gh .chev { display:inline-block; width:9px; transition:transform .15s; } .gh.folded .chev { transform:rotate(-90deg); }
+  .row.hide { display:none; }
+  .gh.needs { animation:needs 1.6s ease-in-out infinite; color:var(--amber); }
+  #asks:empty { display:none; }
+  #asks { padding:6px 8px 2px; border-bottom:1px solid var(--line); }
+  .ask { background:var(--row); border:1px solid var(--line); border-left:3px solid var(--amber); border-radius:6px;
+         padding:6px 8px; margin-bottom:5px; }
+  .ask .at { font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+  .ask .aq { color:var(--muted); font-size:10.5px; margin:2px 0 5px; }
+  .ask .ab { display:flex; gap:6px; } .ask .pill { font-size:10.5px; }
+  .ask .pill.primary { background:var(--text); color:var(--bg); border-color:var(--text); }
+  .more { color:var(--muted); font-size:10px; padding:0 2px 4px; }
 </style></head>
 <body>
 <header>
@@ -75,6 +91,7 @@
   <div class="auto"><span class="conn" id="conn"></span><button class="pill" id="sleepall" title="Put every idle session to sleep now (pinned, focused and busy ones stay awake)">Sleep all idle</button></div>
 </header>
 <div id="settings"></div>
+<div id="asks"></div>
 <div id="list"></div>
 <div id="toast"></div>
 <script>
@@ -88,7 +105,16 @@ const BADGE = {
 const MOON = '<svg width="17" height="17" viewBox="0 0 20 20"><path d="M13.5 15.5A7 7 0 0 1 8.2 3.1a7.5 7.5 0 1 0 8.6 10.2 7 7 0 0 1-3.3 2.2z" fill="currentColor"/></svg>';
 const PIN = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M9.8 1.5l4.7 4.7-1.6.4-2.6 2.6.3 3.3-1.4 1.4-2.6-2.6L3 15l-.9-.9 3.7-3.6-2.6-2.6 1.4-1.4 3.3.3 2.6-2.6z" fill="currentColor"/></svg>';
 const RF = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M13.6 2.4v4.2H9.4l1.6-1.6A4.5 4.5 0 1 0 12.4 9h1.6A6 6 0 1 1 12.1 3.9z" fill="currentColor"/></svg>';
-const rows = new Map();
+const rows = new Map(), heads = new Map();
+let folded = new Set();
+try { folded = new Set(JSON.parse(localStorage.getItem("tabnap.folded") || "[]")); } catch (e) {}
+function saveFolded() { try { localStorage.setItem("tabnap.folded", JSON.stringify([...folded])); } catch (e) {} }
+function headHtml(name, members) {
+  const asleep = members.filter(r => r.state === "hibernated").length, awake = members.length - asleep;
+  const idle = members.some(r => r.state === "idle" && !r.blocker);
+  return `<span class="chev">▾</span>${esc(name || "Other")}<span class="gc">${awake ? awake + " awake" : ""}${awake && asleep ? " · " : ""}${asleep ? asleep + " asleep" : ""}</span>` +
+    (name ? `<button class="pill" data-gsleep="${esc(name)}" ${idle ? "" : "disabled"} title="Put this group's idle sessions to sleep">Sleep idle</button>` : "");
+}
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function mins(m) { m = Math.max(0, Math.round(m||0)); if (m < 60) return m + "m"; if (m < 2880) return Math.floor(m/60) + "h" + (m%60 ? String(m%60).padStart(2,"0") + "m" : ""); return Math.floor(m/1440) + "d"; }
 function gb(mb) { return mb >= 1024 ? (mb/1024).toFixed(1) + " GB" : Math.round(mb) + " MB"; }
@@ -117,6 +143,9 @@ const SHOWN = [
   ["features.needs_pulse", "Blink tabs that need you", "switch"],
   ["features.title_spinner", "Animate working tab titles (iTerm2)", "switch"],
   ["features.tab_icon", "Sleeping icon on hibernated tabs (iTerm2)", "switch"],
+  ["features.collapse_groups", "Collapse a tab group once all its tabs sleep (iTerm2)", "switch"],
+  ["features.group_suggestions", "Suggest a tab group for new sessions: asks you first, and sends the title, folder and last prompt to Claude", "switch"],
+  ["stale_days", "Ask whether you still need a tab asleep this many days (0 = never)", "number"],
   ["panel_title", "Panel title", "text"],
 ];
 async function saveSetting(key, value) {
@@ -184,7 +213,17 @@ function parts(r) {
           `<button class="sw ${asleep ? "" : "on"}" data-sw="${esc(r.id)}" ${busy ? "disabled" : ""} title="${asleep ? "Wake" : "Hibernate"}"></button>`,
   };
 }
+let asksHtml = null;
+function renderAsks(asks) {
+  const shown = asks.slice(0, 3);
+  const html = shown.map(a => `<div class="ask"><div class="at" data-focus="${esc(a.tab)}" title="Go to the tab">${esc(a.title)}</div>` +
+    `<div class="aq">${esc(a.text)}</div><div class="ab">` +
+    a.choices.map(([c, label], i) => `<button class="pill${i === 0 ? " primary" : ""}" data-ask="${esc(a.id)}" data-choice="${esc(c)}">${esc(label)}</button>`).join("") +
+    `</div></div>`).join("") + (asks.length > 3 ? `<div class="more">${asks.length - 3} more after these</div>` : "");
+  if (html !== asksHtml) { document.getElementById("asks").innerHTML = html; asksHtml = html; }
+}
 function render(st) {
+  renderAsks(st.asks || []);
   document.getElementById("sum").textContent = `${st.awake} awake · ${st.asleep} asleep · ${gb(st.in_use_mb)} in use · ${gb(st.freed_mb)} freed`;
   document.getElementById("auto").classList.toggle("on", st.auto);
   document.getElementById("autolabel").textContent = `Auto-hibernate after ${st.idle_minutes} min idle`;
@@ -200,8 +239,23 @@ function render(st) {
   list.querySelector(".empty")?.remove();
   const ids = new Set(st.sessions.map(r => r.id));
   for (const [id, item] of rows) if (!ids.has(id)) { item.el.remove(); rows.delete(id); }
-  let prev = null;
+  const grouped = (st.groups || []).length > 0, names = new Set(grouped ? st.sessions.map(r => r.group || "") : []);
+  for (const [g, h] of heads) if (!names.has(g)) { h.el.remove(); heads.delete(g); }
+  let prev = null, lastGroup = null;
   for (const r of st.sessions) {
+    const g = r.group || "";
+    if (grouped && g !== lastGroup) {
+      lastGroup = g;
+      let h = heads.get(g);
+      if (!h) { h = {el: document.createElement("div"), html: ""}; h.el.className = "gh"; h.el.dataset.group = g; heads.set(g, h); }
+      const html = headHtml(g, st.sessions.filter(x => (x.group || "") === g));
+      if (h.html !== html) { h.el.innerHTML = html; h.html = html; }
+      h.el.classList.toggle("folded", folded.has(g));
+      h.el.classList.toggle("needs", st.sessions.some(x => (x.group || "") === g && x.needs));
+      const at = prev ? prev.nextSibling : list.firstChild;
+      if (at !== h.el) list.insertBefore(h.el, at);
+      prev = h.el;
+    }
     const p = parts(r);
     let item = rows.get(r.id);
     if (!item) {
@@ -215,6 +269,7 @@ function render(st) {
     if (item.p.cls !== p.cls) item.el.className = p.cls;
     for (const k of ["ico", "grow", "btns"]) if (item.p[k] !== p[k]) item.el.querySelector("." + k).innerHTML = p[k];
     item.p = p;
+    item.el.classList.toggle("hide", grouped && folded.has(g));
     const want = prev ? prev.nextSibling : list.firstChild;
     if (want !== item.el) list.insertBefore(item.el, want);
     prev = item.el;
@@ -228,7 +283,20 @@ async function refresh() {
 }
 document.addEventListener("click", e => {
   const sw = e.target.closest("[data-sw]"), pin = e.target.closest("[data-pin]"), rf = e.target.closest("[data-rf]");
-  const row = e.target.closest(".row");
+  const row = e.target.closest(".row"), gs = e.target.closest("[data-gsleep]"), gh = e.target.closest(".gh");
+  if (gs) {
+    e.stopPropagation(); gs.disabled = true; gs.textContent = "Sleeping…";
+    return fetch("/api/hibernate_idle?t=" + T + "&group=" + encodeURIComponent(gs.dataset.gsleep), {method: "POST"}).then(r => r.json()).then(r => {
+      toast(r.slept ? `${gs.dataset.gsleep}: ${r.slept.length} put to sleep` : (r.error || "failed"), !!r.slept); refresh();
+    });
+  }
+  const ask = e.target.closest("[data-ask]"), fo = e.target.closest("[data-focus]");
+  if (ask) {
+    e.stopPropagation(); ask.closest(".ask").querySelectorAll("button").forEach(b => b.disabled = true);
+    return post("/api/answer", {ask: ask.dataset.ask, choice: ask.dataset.choice});
+  }
+  if (fo) return post("/api/focus", {id: fo.dataset.focus});
+  if (gh) { const g = gh.dataset.group; folded.has(g) ? folded.delete(g) : folded.add(g); saveFolded(); return refresh(); }
   if (rf) { e.stopPropagation(); return post("/api/refresh", {id: rf.dataset.rf}); }
   if (e.target.closest("#sleepall")) {
     const b = document.getElementById("sleepall"); b.disabled = true; b.textContent = "Sleeping…";
