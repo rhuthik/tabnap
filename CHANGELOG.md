@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- iTerm2: a tab closing mid-scan (`SESSION_NOT_FOUND`) was treated as a lost connection, and the
+  reconnect left the old socket open, so it kept the status-bar RPC and every retry failed with
+  `DUPLICATE_SERVER_ORIGINATED_RPC` until the daemon was restarted. The scan now skips the closed
+  tab, and a reconnect closes the old connection first.
 - A terminal that accepts the connection but never answers (iTerm2 mid-restart) no longer freezes the
   daemon: connecting now times out after 20 s and retries.
 - iTerm2: reconnect after iTerm2 restarts or updates. The iterm2 library kept the first auth cookie,

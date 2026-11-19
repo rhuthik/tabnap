@@ -74,6 +74,13 @@ class ITerm(Terminal):
             # environment, and a used cookie is rejected, so drop it and let it ask iTerm2 for a new one.
             os.environ.pop("ITERM2_COOKIE", None)
             os.environ.pop("ITERM2_KEY", None)
+            # If the old socket is still open, it still owns tabnap_toggle, and iTerm2 rejects the new
+            # registration with DUPLICATE_SERVER_ORIGINATED_RPC on every retry.
+            try:
+                await self.conn.websocket.close()
+            except Exception:  # pylint: disable=broad-except
+                pass
+            self.conn = None
         self.conn = await iterm2.Connection.async_create()
         self.app = await iterm2.async_get_app(self.conn)
         self.icon = self.cfg.iterm_icon if self.cfg.iterm_icon and os.path.exists(self.cfg.iterm_icon) else ICON_PATH
@@ -129,9 +136,14 @@ class ITerm(Terminal):
             for ti, tab in enumerate(window.tabs):
                 for si, s in enumerate(tab.sessions):
                     sid = s.session_id
-                    if sid not in self.ttys:
-                        self.ttys[sid] = await s.async_get_variable("tty")
-                    name = await s.async_get_variable("autoName") or ""
+                    try:
+                        if sid not in self.ttys:
+                            self.ttys[sid] = await s.async_get_variable("tty")
+                        name = await s.async_get_variable("autoName") or ""
+                    except iterm2.RPCException as e:
+                        if "SESSION_NOT_FOUND" not in str(e):
+                            raise
+                        continue  # closed since the App snapshot; not a lost connection
                     out.append(Pane(key=f"{self.prefix}:{sid}", tty=self.ttys[sid], name=name,
                                     focused=sid == current, shell=False, order=(wi, ti, si), term=self, ref=sid))
         return out
