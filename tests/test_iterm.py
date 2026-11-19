@@ -3,7 +3,10 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import iterm2
+try:
+    import iterm2
+except ImportError:  # the iterm extra isn't installed (Linux CI)
+    raise unittest.SkipTest("iterm2 not installed")
 
 from tabnap.config import Config
 from tabnap.terminals import iterm as iterm_mod
